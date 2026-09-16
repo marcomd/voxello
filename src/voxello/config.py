@@ -42,7 +42,11 @@ class VoiceStudioSettings(BaseModel):
     api_key: SecretStr | None = Field(
         default=None, description="Bearer token; required when VoiceStudio is on another host."
     )
-    voice: str = Field(default="default", description="Voice profile id or 'default'.")
+    voice: str | None = Field(
+        default=None,
+        description="Voice id sent to the server; omit to use the server's own default "
+        "('default' on VoiceStudio, 'auto' on omnivoice-server).",
+    )
     engine: str = Field(default="omnivoice", description="VoiceStudio TTS engine ('model' field).")
     language: str | None = Field(default="it", description="ISO 639-1 language hint.")
     speed: float | None = Field(default=None, ge=0.25, le=4.0)
@@ -194,10 +198,10 @@ server:
 tts:
   provider: voicestudio
   voicestudio:
-    base_url: http://localhost:3900     # intranet host: http://voicestudio.lan:3900
-    # api_key: "change-me"              # required when VoiceStudio is not on localhost
-    voice: default                      # a VoiceStudio profile id, or "default"
-    engine: omnivoice                   # voxcpm2, cosyvoice, mlx-audio, kittentts, moss-tts-nano
+    base_url: http://localhost:3900     # VoiceStudio; omnivoice-server uses http://host:8880
+    # api_key: "change-me"              # required when VoiceStudio is on another host
+    # voice: alloy                      # omit for the server default; VoiceStudio: profile id
+    engine: omnivoice                   # VoiceStudio: voxcpm2, cosyvoice, mlx-audio, kittentts, ...
     language: it
     timeout_seconds: 120
 

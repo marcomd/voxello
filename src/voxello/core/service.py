@@ -198,7 +198,7 @@ class VoxelloService:
                 "speak %s: %s voice=%s mode=%s interrupt=%s play=%s save=%s client=%s",
                 request_id,
                 describe_text(text, self.settings.logging.log_text),
-                voice or self.settings.tts.voicestudio.voice,
+                voice or self.settings.tts.voicestudio.voice or "server-default",
                 mode,
                 interrupt,
                 play,
@@ -299,7 +299,7 @@ class VoxelloService:
             status=state,  # type: ignore[arg-type]
             request_id=current.request_id if current else None,
             provider=self.provider.name,
-            voice=self.settings.tts.voicestudio.voice,
+            voice=self.settings.tts.voicestudio.voice or "server-default",
             queue_length=queue_length,
             health=await self.health(),
             recent=recent,

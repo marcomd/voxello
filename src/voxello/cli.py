@@ -113,7 +113,7 @@ async def cmd_doctor(settings: Settings, config_path: Path | None) -> int:
     vs = settings.tts.voicestudio
     print(f"TTS provider: {settings.tts.provider} at {vs.base_url}")
     print(
-        f"  engine={vs.engine} voice={vs.voice} language={vs.language} "
+        f"  engine={vs.engine} voice={vs.voice or 'server-default'} language={vs.language} "
         f"api_key={'set' if vs.api_key else 'not set'}"
     )
 
@@ -121,8 +121,9 @@ async def cmd_doctor(settings: Settings, config_path: Path | None) -> int:
     try:
         health = await provider.health()
         if health.status == "ok":
-            extra = f" (version {health.version})" if health.version else ""
-            print(f"  health: ok{extra}")
+            details = [f"version {health.version}"] if health.version else []
+            details += [f"{k}={v}" for k, v in health.extra.items() if k in ("model_id", "device")]
+            print(f"  health: ok{' (' + ', '.join(details) + ')' if details else ''}")
             try:
                 engines = await provider.list_engines()
                 if engines:
@@ -131,10 +132,11 @@ async def cmd_doctor(settings: Settings, config_path: Path | None) -> int:
                 print(f"  engines: could not list ({exc.code})")
             try:
                 voices = await provider.list_voices()
-                names = [v.name or v.id for v in voices[:10]]
+                ids = [v.id for v in voices[:16]]
+                more = f", +{len(voices) - len(ids)} more" if len(voices) > len(ids) else ""
                 print(
                     f"  voices: {len(voices)} available"
-                    + (f": {', '.join(names)}" if names else "")
+                    + (f": {', '.join(ids)}{more}" if ids else "")
                 )
             except VoxelloError as exc:
                 print(f"  voices: could not list ({exc.code})")

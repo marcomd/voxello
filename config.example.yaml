@@ -5,10 +5,10 @@ server:
 tts:
   provider: voicestudio
   voicestudio:
-    base_url: http://localhost:3900     # intranet host: http://voicestudio.lan:3900
-    # api_key: "change-me"              # required when VoiceStudio is not on localhost
-    voice: default                      # a VoiceStudio profile id, or "default"
-    engine: omnivoice                   # voxcpm2, cosyvoice, mlx-audio, kittentts, moss-tts-nano
+    base_url: http://localhost:3900     # VoiceStudio; omnivoice-server uses http://host:8880
+    # api_key: "change-me"              # required when VoiceStudio is on another host
+    # voice: alloy                      # omit for the server default; VoiceStudio: profile id
+    engine: omnivoice                   # VoiceStudio: voxcpm2, cosyvoice, mlx-audio, kittentts, ...
     language: it
     timeout_seconds: 120
 

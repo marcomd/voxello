@@ -3,20 +3,22 @@
 **A local voice and notification layer for AI agents.**
 
 Voxello is a small MCP server that lets Claude Code, Codex, Cursor and other MCP clients
-`speak`, `notify`, `stop_speaking` and `get_status`. It sends text to a local TTS provider
-(VoiceStudio, running OmniVoice or another engine), plays the audio on your speaker, shows
-desktop notifications, and cleans up after itself. The agent decides *what* to say; Voxello
+`speak`, `notify`, `stop_speaking` and `get_status`. It sends text to a local TTS server
+(VoiceStudio, or the headless `omnivoice-server`, both running OmniVoice), plays the audio on
+your speaker, shows desktop notifications, and cleans up after itself. The agent decides *what* to say; Voxello
 handles *how* it is delivered.
 
 ```
-Agent ──MCP──▶ Voxello ──HTTP──▶ VoiceStudio ──▶ WAV ──▶ afplay / mpv / PowerShell
+Agent ──MCP──▶ Voxello ──HTTP──▶ VoiceStudio / omnivoice-server ──▶ WAV ──▶ afplay / mpv / PowerShell
                   └──▶ desktop notification, saved file
 ```
 
 ## Requirements
 
 - Python 3.12+ and [uv](https://docs.astral.sh/uv/)
-- [VoiceStudio](https://github.com/debpalash/VoiceStudio) open on this machine or on an intranet host
+- A TTS server on this machine or on an intranet host: [VoiceStudio](https://github.com/debpalash/VoiceStudio)
+  (port 3900, API runs while the app is open) or [omnivoice-server](https://github.com/maemreyo/omnivoice-server)
+  (port 8880, headless)
 - An audio player: `afplay` (macOS, built in), `mpv`/`paplay`/`aplay`/`ffplay` (Linux), PowerShell (Windows)
 
 ## Install
@@ -42,17 +44,30 @@ uv run voxello config init        # writes ~/Library/Application Support/voxello
 uv run voxello config path        # shows where the file lives on this OS
 ```
 
-Minimal intranet setup:
+Minimal intranet setup with `omnivoice-server`:
+
+```yaml
+tts:
+  voicestudio:
+    base_url: http://192.168.1.144:8880
+    # voice: alloy          # omit for the server default; presets: alloy, ash, ballad, cedar, coral, echo, fable, marin, nova, onyx, sage, shimmer, verse
+    language: it
+```
+
+With VoiceStudio on another host:
 
 ```yaml
 tts:
   voicestudio:
     base_url: http://voicestudio.lan:3900
     api_key: "the key configured as OMNIVOICE_API_KEY on the VoiceStudio host"
-    engine: omnivoice
-    voice: default
+    engine: omnivoice       # or voxcpm2, cosyvoice, mlx-audio, kittentts, moss-tts-nano
+    # voice: <profile id>
     language: it
 ```
+
+Leave `voice` unset to use the server's default: VoiceStudio and omnivoice-server disagree on
+its name (`default` vs `auto`) and each rejects the other's.
 
 Environment variables override the file: `VOXELLO_VOICESTUDIO_URL`, `VOXELLO_VOICESTUDIO_API_KEY`,
 `VOXELLO_DEFAULT_VOICE`, `VOXELLO_LOG_LEVEL`, or any nested key as `VOXELLO_TTS__VOICESTUDIO__ENGINE`.
@@ -122,9 +137,10 @@ Errors come back as tool errors with a stable code: `tts_provider_unavailable`,
 
 ## Troubleshooting
 
-- `tts_provider_unavailable`: VoiceStudio is not open, or `base_url` is wrong. Its API only runs
-  while the desktop app is running.
-- `tts_provider_unauthorized`: the host is remote and needs `api_key` (VoiceStudio's `OMNIVOICE_API_KEY`).
+- `tts_provider_unavailable`: the TTS server is down or `base_url` is wrong. VoiceStudio's API only
+  runs while the desktop app is open; `omnivoice-server` runs headless.
+- `tts_provider_unauthorized`: the host is remote and needs `api_key` (`OMNIVOICE_API_KEY` on the server).
+- `voice_not_found`: the voice id does not exist on this server; `voxello doctor` lists the valid ids.
 - No desktop notification on macOS: the terminal app hosting the agent needs notification
   permission in System Settings. Installing `terminal-notifier` (`brew install terminal-notifier`)
   is picked up automatically as an alternative.
@@ -142,10 +158,10 @@ uv run pyright src
 ```
 
 Design notes: `docs/voxello-specification.md` (the specification) and `docs/voicestudio-api.md`
-(the VoiceStudio HTTP contract Voxello relies on).
+(the VoiceStudio and omnivoice-server HTTP contracts Voxello relies on).
 
 ## Licensing
 
-Voxello is Apache-2.0. VoiceStudio is AGPL-3.0 and is only called over HTTP. The default
-OmniVoice engine's model weights are CC-BY-NC (non-commercial); choose another engine through
-`tts.voicestudio.engine` where that matters.
+Voxello is Apache-2.0. VoiceStudio is AGPL-3.0 and omnivoice-server is MIT; both are only called
+over HTTP. OmniVoice's model weights are CC-BY-NC (non-commercial); with VoiceStudio you can choose
+another engine through `tts.voicestudio.engine` where that matters.

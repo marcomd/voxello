@@ -1,9 +1,12 @@
-"""VoiceStudio provider.
+"""VoiceStudio / omnivoice-server provider.
 
-Talks to VoiceStudio's local API (default ``http://localhost:3900``) through its
-OpenAI-compatible ``POST /v1/audio/speech`` endpoint. A successful response is raw
-audio, so we never parse a 200 as JSON and always check the content type, because
-an unavailable encoder can fall back to WAV. See ``docs/voicestudio-api.md``.
+Talks to an OpenAI-compatible ``POST /v1/audio/speech`` endpoint as exposed by
+VoiceStudio (default ``http://localhost:3900``) and by the standalone
+``omnivoice-server`` (default port 8880). A successful response is raw audio, so we
+never parse a 200 as JSON and always sniff the WAV header, because an unavailable
+encoder can fall back to WAV. Discovery endpoints differ between the two servers, so
+listing voices and engines tries VoiceStudio's paths first and falls back to the
+omnivoice-server ones. See ``docs/voicestudio-api.md``.
 """
 
 from __future__ import annotations
@@ -27,9 +30,10 @@ from voxello.tts.base import ProviderHealth, SynthesisResult, VoiceInfo
 log = logging.getLogger(__name__)
 
 SPEECH_PATH = "/v1/audio/speech"
-VOICES_PATH = "/v1/audio/voices"
 HEALTH_PATH = "/health"
-ENGINES_PATH = "/engines/tts"
+VOICES_PATHS = ("/v1/audio/voices", "/v1/voices")  # VoiceStudio, then omnivoice-server
+ENGINES_PATHS = ("/engines/tts", "/v1/models")
+DEFAULT_VOICE_LABEL = "server-default"
 MAX_INPUT_CHARS = 4096  # hard limit of the VoiceStudio SpeechRequest schema
 
 
@@ -59,10 +63,10 @@ class VoiceStudioProvider:
         payload: dict[str, Any] = {
             "input": text,
             "model": s.engine,
-            "voice": voice or s.voice,
             "response_format": "wav",
         }
         optional = {
+            "voice": voice or s.voice,
             "language": s.language,
             "speed": s.speed,
             "num_step": s.num_step,
@@ -84,15 +88,16 @@ class VoiceStudioProvider:
         except httpx2.HTTPError as exc:
             raise VoxelloError(TTS_PROVIDER_ERROR, f"VoiceStudio request failed: {exc}") from exc
 
+        voice_label = payload.get("voice", DEFAULT_VOICE_LABEL)
         if response.status_code != 200:
-            raise self._status_error(response, payload["voice"])
+            raise self._status_error(response, payload.get("voice"))
 
         content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
         body = response.content
         if not body:
             raise VoxelloError(TTS_PROVIDER_ERROR, "VoiceStudio returned an empty audio response.")
         if is_wav(body):
-            return SynthesisResult(body, "audio/wav", self.name, payload["voice"])
+            return SynthesisResult(body, "audio/wav", self.name, voice_label)
         if content_type.startswith("audio/"):
             raise VoxelloError(
                 TTS_PROVIDER_ERROR,
@@ -104,7 +109,7 @@ class VoiceStudioProvider:
         )
 
     async def list_voices(self) -> list[VoiceInfo]:
-        data = await self._get_json(VOICES_PATH)
+        data = await self._get_json_first(VOICES_PATHS)
         items: Any = data
         if isinstance(data, dict):
             items = data.get("voices") or data.get("data") or data.get("items") or []
@@ -123,14 +128,16 @@ class VoiceStudioProvider:
                     voices.append(
                         VoiceInfo(
                             id=str(vid),
-                            name=item.get("name") or item.get("display_name"),
+                            name=item.get("name")
+                            or item.get("display_name")
+                            or item.get("description"),
                             language=item.get("language"),
                         )
                     )
         return voices
 
     async def list_engines(self) -> list[str]:
-        data = await self._get_json(ENGINES_PATH)
+        data = await self._get_json_first(ENGINES_PATHS)
         items: Any = data
         if isinstance(data, dict):
             items = data.get("engines") or data.get("backends") or data.get("data") or []
@@ -150,26 +157,52 @@ class VoiceStudioProvider:
         except httpx2.HTTPError as exc:
             return ProviderHealth("error", self._unavailable(exc).message)
         if response.status_code in (401, 403):
-            return ProviderHealth("error", "VoiceStudio rejected the API key (remote access).")
+            return ProviderHealth("error", "The TTS server rejected the API key (remote access).")
         if response.status_code != 200:
             return ProviderHealth(
-                "error", f"VoiceStudio /health returned HTTP {response.status_code}."
+                "error", f"The TTS server /health returned HTTP {response.status_code}."
             )
         version: str | None = None
         extra: dict[str, object] = {}
         try:
             body = response.json()
-            if isinstance(body, dict):
-                version = str(body.get("version")) if body.get("version") else None
-                extra = {k: v for k, v in body.items() if k in ("status", "device", "version")}
         except ValueError:
-            pass
+            body = None
+        if isinstance(body, dict):
+            version = str(body["version"]) if body.get("version") else None
+            extra = {
+                k: v
+                for k, v in body.items()
+                if k in ("status", "device", "version", "model_id", "ready", "model_loaded")
+            }
+            status = str(body.get("status", "ok")).lower()
+            not_ready = body.get("ready") is False or body.get("model_loaded") is False
+            if status not in ("ok", "healthy", "ready") or not_ready:
+                return ProviderHealth(
+                    "error",
+                    f"The TTS server reports status '{status}' (not ready).",
+                    version,
+                    extra,
+                )
         return ProviderHealth("ok", None, version, extra)
 
     async def aclose(self) -> None:
         await self._client.aclose()
 
     # -- helpers -----------------------------------------------------------------
+
+    async def _get_json_first(self, paths: tuple[str, ...]) -> Any:
+        """GET the first path that does not answer 404 (servers differ in their routes)."""
+        last: VoxelloError | None = None
+        for path in paths:
+            try:
+                return await self._get_json(path)
+            except VoxelloError as exc:
+                if exc.details.get("http_status") != 404:
+                    raise
+                last = exc
+        assert last is not None
+        raise last
 
     async def _get_json(self, path: str) -> Any:
         try:
@@ -182,14 +215,14 @@ class VoiceStudioProvider:
             return response.json()
         except ValueError as exc:
             raise VoxelloError(
-                TTS_PROVIDER_ERROR, f"VoiceStudio {path} did not return JSON."
+                TTS_PROVIDER_ERROR, f"The TTS server {path} did not return JSON."
             ) from exc
 
     def _unavailable(self, exc: Exception) -> VoxelloError:
         return VoxelloError(
             TTS_PROVIDER_UNAVAILABLE,
-            f"VoiceStudio is not reachable at {self.base_url}. "
-            "Make sure the VoiceStudio app is open and the URL is correct.",
+            f"The TTS server is not reachable at {self.base_url}. "
+            "Make sure VoiceStudio (or omnivoice-server) is running and the URL is correct.",
             details={"reason": type(exc).__name__},
         )
 
@@ -199,26 +232,41 @@ class VoiceStudioProvider:
         if code in (401, 403):
             return VoxelloError(
                 TTS_PROVIDER_UNAUTHORIZED,
-                "VoiceStudio rejected the request: an API key is required for remote access "
+                "The TTS server rejected the request: an API key is required for remote access "
                 "(set tts.voicestudio.api_key).",
+                details={"http_status": code},
             )
         if code == 404:
             return VoxelloError(
                 TTS_PROVIDER_ERROR,
-                f"Endpoint not found at {self.base_url}; is this a VoiceStudio API (port 3900)?",
+                f"Endpoint {response.url.path} not found at {self.base_url}; "
+                "is this a VoiceStudio (3900) or omnivoice-server (8880) API?",
+                details={"http_status": code},
             )
         if code in (400, 422):
             lowered = detail.lower()
             if voice and ("voice" in lowered or "profile" in lowered):
                 return VoxelloError(
-                    VOICE_NOT_FOUND, f"The requested voice profile '{voice}' does not exist."
+                    VOICE_NOT_FOUND,
+                    f"The requested voice '{voice}' is not available: {detail}",
+                    details={"http_status": code},
                 )
-            return VoxelloError(TTS_PROVIDER_ERROR, f"VoiceStudio rejected the request: {detail}")
+            return VoxelloError(
+                TTS_PROVIDER_ERROR,
+                f"The TTS server rejected the request: {detail}",
+                details={"http_status": code},
+            )
         if code >= 500:
             return VoxelloError(
-                TTS_PROVIDER_ERROR, f"VoiceStudio failed to synthesize (HTTP {code}): {detail}"
+                TTS_PROVIDER_ERROR,
+                f"The TTS server failed to synthesize (HTTP {code}): {detail}",
+                details={"http_status": code},
             )
-        return VoxelloError(TTS_PROVIDER_ERROR, f"VoiceStudio returned HTTP {code}: {detail}")
+        return VoxelloError(
+            TTS_PROVIDER_ERROR,
+            f"The TTS server returned HTTP {code}: {detail}",
+            details={"http_status": code},
+        )
 
 
 def _extract_detail(response: httpx2.Response) -> str:

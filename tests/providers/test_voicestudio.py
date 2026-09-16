@@ -53,15 +53,83 @@ async def test_synthesize_sends_expected_payload_and_returns_wav():
     await provider.aclose()
 
 
-async def test_default_voice_and_no_auth_header():
+async def test_voice_omitted_by_default_and_no_auth_header():
     def handler(request: httpx2.Request) -> httpx2.Response:
         body = json.loads(request.content)
-        assert body["voice"] == "default"
+        assert "voice" not in body, "server default must apply when no voice is configured"
         assert "authorization" not in request.headers
         return httpx2.Response(200, content=make_wav(10), headers={"content-type": "audio/wav"})
 
     provider, _ = make_provider(handler)
-    await provider.synthesize("x")
+    result = await provider.synthesize("x")
+    assert result.voice == "server-default"
+
+
+async def test_configured_voice_is_sent():
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        assert json.loads(request.content)["voice"] == "alloy"
+        return httpx2.Response(200, content=make_wav(10))
+
+    provider, _ = make_provider(handler, voice="alloy")
+    assert (await provider.synthesize("x")).voice == "alloy"
+
+
+async def test_omnivoice_server_error_shape_maps_to_voice_not_found():
+    provider, _ = make_provider(
+        lambda r: httpx2.Response(
+            422,
+            json={
+                "error": {
+                    "code": "validation_error",
+                    "message": "Unsupported voice value 'default'. Use a known preset.",
+                }
+            },
+        )
+    )
+    with pytest.raises(VoxelloError) as exc:
+        await provider.synthesize("x", "default")
+    assert exc.value.code == VOICE_NOT_FOUND
+    assert "known preset" in exc.value.message
+
+
+async def test_discovery_falls_back_to_omnivoice_server_routes():
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        path = request.url.path
+        if path == "/health":
+            return httpx2.Response(
+                200,
+                json={"status": "healthy", "ready": True, "model_loaded": True, "model_id": "k2"},
+            )
+        if path == "/v1/voices":
+            return httpx2.Response(
+                200, json={"voices": [{"id": "auto", "description": "fallback"}]}
+            )
+        if path == "/v1/models":
+            return httpx2.Response(200, json={"object": "list", "data": [{"id": "omnivoice"}]})
+        return httpx2.Response(404, json={"detail": "Not Found"})
+
+    provider, seen = make_provider(handler)
+    health = await provider.health()
+    assert health.status == "ok" and health.extra["model_id"] == "k2"
+    voices = await provider.list_voices()
+    assert voices[0].id == "auto" and voices[0].name == "fallback"
+    assert await provider.list_engines() == ["omnivoice"]
+    assert [r.url.path for r in seen][1:] == [
+        "/v1/audio/voices",
+        "/v1/voices",
+        "/engines/tts",
+        "/v1/models",
+    ]
+
+
+async def test_health_not_ready_is_an_error():
+    provider, _ = make_provider(
+        lambda r: httpx2.Response(
+            200, json={"status": "healthy", "ready": False, "model_loaded": False}
+        )
+    )
+    health = await provider.health()
+    assert health.status == "error" and "not ready" in (health.detail or "")
 
 
 async def test_wav_fallback_with_wrong_content_type_is_accepted():
@@ -115,7 +183,7 @@ async def test_422_voice_error_maps_to_voice_not_found():
     with pytest.raises(VoxelloError) as exc:
         await provider.synthesize("x", "ghost")
     assert exc.value.code == VOICE_NOT_FOUND
-    assert "ghost" in exc.value.message
+    assert "ghost" in exc.value.message and "voice profile not found" in exc.value.message
 
 
 async def test_422_other_error_is_provider_error():
