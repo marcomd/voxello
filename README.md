@@ -111,6 +111,54 @@ args = ["run", "--directory", "/path/to/voxello", "voxello", "serve"]
 Then ask the agent, for example: *"Refactor the auth module, run the tests, and tell me by
 voice when you are done."*
 
+## Claude Code skill and hook
+
+Two small Claude Code additions ship in `.claude/` and turn Voxello into the "tell me when you
+are done" workflow.
+
+**`voice-notify` skill** (`.claude/skills/voice-notify/SKILL.md`). When you ask Claude Code to
+notify you by voice ("avvisami a voce quando hai finito", "notify me by voice", "leggimelo"), the
+skill activates and Claude ends the task with one `notify` call carrying a one or two sentence
+spoken summary in your language, on the voice and desktop channels, with high priority when the
+task failed or is blocked. Install it for every project by copying the file:
+
+```bash
+mkdir -p ~/.claude/skills/voice-notify
+cp .claude/skills/voice-notify/SKILL.md ~/.claude/skills/voice-notify/
+```
+
+It can also be invoked explicitly with `/voice-notify`. The skill relies on the model to make the
+final call; the hook below is the deterministic half.
+
+**Notification hook** (`.claude/hooks/voxello-notification-hook.sh`). Claude Code fires a
+`Notification` event when it waits on a permission prompt or goes idle. The hook turns the event
+into a short spoken sentence ("Claude Code chiede un permesso per continuare.") and delivers it
+through `voxello notify`, so you hear it when you have walked away from the terminal. Add it to
+`~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "permission_prompt|idle_prompt|agent_needs_input|elicitation_dialog",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/voxello/.claude/hooks/voxello-notification-hook.sh",
+            "async": true,
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The script speaks Italian by default; set `VOXELLO_HOOK_LANG=en` for English and
+`VOXELLO_HOOK_CHANNELS=desktop` to keep it silent. Review or disable it later with `/hooks`.
+
 ## Tools
 
 | Tool | Purpose | Key parameters |
