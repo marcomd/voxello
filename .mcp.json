@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "voxello": {
-      "command": "uv",
-      "args": ["run", "voxello", "serve"]
-    }
-  }
-}

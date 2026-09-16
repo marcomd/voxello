@@ -66,27 +66,7 @@ whose response shape is undocumented). Long-form and dubbing are job-based (`/jo
 - OmniVoice (the default engine): code Apache-2.0, **model weights CC-BY-NC** (non-commercial).
   For commercial use pick another engine via `tts.voicestudio.engine` and review its license.
 
-## omnivoice-server (alternative backend, verified 2026-09-16)
+## omnivoice-server
 
-The same provider also works against `omnivoice-server` (PyPI `omnivoice-server`, MIT), a
-headless OpenAI-compatible wrapper around OmniVoice. Verified against version 0.1.0 at
-`http://192.168.1.144:8880` (`/openapi.json`, title "omnivoice-server").
-
-Differences from VoiceStudio that the adapter handles:
-
-| Concern | VoiceStudio | omnivoice-server | Adapter behaviour |
-|---|---|---|---|
-| Default port | 3900 | 8880 | `base_url` |
-| Synthesis | `POST /v1/audio/speech` | same, `response_format` already defaults to `wav` | identical payload |
-| Default voice | `default` | `auto` (British male); `default` is **rejected with 422** | `voice` is omitted unless configured |
-| Voice ids | profile ids | presets `alloy ash ballad cedar coral echo fable marin nova onyx sage shimmer verse`, `auto`, `design:<attributes>`, `clone:<profile_id>` | pass-through |
-| Voices list | `GET /v1/audio/voices` | `GET /v1/voices` -> `{"voices":[{"id","type","description"}]}` | tries both |
-| Engines | `GET /engines/tts` | `GET /v1/models` -> `{"data":[{"id":"omnivoice"},...]}` | tries both |
-| Health | `GET /health` | `GET /health` -> `{"status":"healthy","ready":true,"model_loaded":true,"model_id":"k2-fsa/OmniVoice",...}` | `ready`/`model_loaded` false is reported as an error |
-| Errors | FastAPI `{"detail":[...]}` | `{"error":{"code":"validation_error","message":"..."}}` (plus `detail` for field errors) | both shapes parsed |
-| Auth | Bearer required off-localhost | none unless `OMNIVOICE_API_KEY` is set on the server | header sent when `api_key` configured |
-| Streaming | multipart `/generate` only | `"stream": true` on `/v1/audio/speech` | not used yet |
-| Extra | profiles, gallery, dubbing | `/v1/audio/speech/clone` (one-shot cloning), `/v1/voices/profiles`, `/v1/audio/script`, `/metrics` | not used |
-
-Measured: an Italian sentence of 2.8 s of audio took about 1.9 s to synthesize; 24 kHz mono
-16-bit WAV, as with VoiceStudio.
+The same provider also drives the headless `omnivoice-server`; its contract and
+configuration are documented in `omnivoice-server-api.md`.

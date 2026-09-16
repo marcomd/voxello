@@ -90,8 +90,9 @@ uv run voxello notify "Refactoring completato." --channels voice,desktop
 claude mcp add --scope user --transport stdio voxello -- uv run --directory /path/to/voxello voxello serve
 ```
 
-This repository also ships a project-scoped `.mcp.json`, so opening the repo in Claude Code
-registers the server automatically.
+Check the connection with `claude mcp get voxello`; it should report `Connected`. A user-scoped
+entry is preferable to a project `.mcp.json` because Claude Code warns when the same server is
+defined in two scopes with different commands.
 
 **Codex CLI** (`~/.codex/config.toml`):
 
@@ -157,8 +158,8 @@ uv run ruff check src tests && uv run ruff format --check src tests
 uv run pyright src
 ```
 
-Design notes: `docs/voxello-specification.md` (the specification) and `docs/voicestudio-api.md`
-(the VoiceStudio and omnivoice-server HTTP contracts Voxello relies on).
+Design notes: `docs/voxello-specification.md` (the specification), `docs/voicestudio-api.md`
+(VoiceStudio HTTP contract) and `docs/omnivoice-server-api.md` (omnivoice-server setup and contract).
 
 ## Licensing
 
