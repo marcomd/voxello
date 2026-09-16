@@ -1,0 +1,41 @@
+# Voxello configuration. Environment variables (VOXELLO_*) override these values.
+server:
+  transport: stdio
+
+tts:
+  provider: voicestudio
+  voicestudio:
+    base_url: http://localhost:3900     # intranet host: http://voicestudio.lan:3900
+    # api_key: "change-me"              # required when VoiceStudio is not on localhost
+    voice: default                      # a VoiceStudio profile id, or "default"
+    engine: omnivoice                   # voxcpm2, cosyvoice, mlx-audio, kittentts, moss-tts-nano
+    language: it
+    timeout_seconds: 120
+
+playback:
+  enabled: true
+  default_interrupt: true
+  interrupt_clears_queue: true
+  volume: 0.8
+  max_queue_size: 10
+
+notifications:
+  voice: true
+  desktop: true
+  title: Voxello
+
+storage:
+  temp_retention_minutes: 10
+  cleanup_on_start: true
+
+output:
+  save_by_default: false
+  directory: ~/Voxello
+
+limits:
+  max_text_chars: 2000
+
+logging:
+  level: info
+  log_text: false
+  # file: ~/Library/Logs/voxello.log
