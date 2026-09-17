@@ -37,6 +37,7 @@ full text stays in your written answer.
 ```json
 {
   "message": "<the spoken message>",
+  "language": "it",
   "channels": ["voice", "desktop"],
   "priority": "normal",
   "title": "Claude Code",
@@ -44,6 +45,9 @@ full text stays in your written answer.
 }
 ```
 
+- `language`: the ISO 639-1 code of the language the message is written in (`it` for an Italian
+  message, `en` for English), so pronunciation matches the text. Always pass it; it must agree
+  with the language you chose above.
 - `priority`: `high` when the task failed or is blocked waiting for the user; `normal` otherwise.
   High priority interrupts any speech currently playing.
 - `channels`: keep both; the desktop notification shows the same text for when the user has

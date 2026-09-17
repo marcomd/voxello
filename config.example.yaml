@@ -9,8 +9,13 @@ tts:
     # api_key: "change-me"              # required when VoiceStudio is on another host
     # voice: alloy                      # omit for the server default; VoiceStudio: profile id
     engine: omnivoice                   # VoiceStudio: voxcpm2, cosyvoice, mlx-audio, kittentts, ...
-    language: it
     timeout_seconds: 120
+
+speech:
+  default_language: it                  # ISO 639-1; agents pass `language` per request
+  # voices_by_language:                 # voice used when a request passes no voice
+  #   it: italian_voice
+  #   en: english_voice
 
 playback:
   enabled: true

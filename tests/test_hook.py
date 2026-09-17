@@ -1,7 +1,10 @@
-"""Tests for the Claude Code Notification hook script (bash).
+"""Tests for the Claude Code Notification hook.
 
-A fake ``voxello`` (or ``uv``) on a temporary PATH records its arguments, so the tests
-check exactly what the hook runs without speaking or touching a TTS server.
+The bash script only resolves the ``voxello`` command and execs ``voxello hook
+notification`` with the Notification JSON on stdin; a fake ``voxello`` (or ``uv``) on a
+temporary PATH records its arguments and stdin, so the tests check exactly what the hook
+runs without speaking or touching a TTS server. The sentence selection is Python
+(``install.hook_text``) and is tested directly.
 """
 
 from __future__ import annotations
@@ -15,6 +18,9 @@ from pathlib import Path
 
 import pytest
 
+from voxello import install
+from voxello.errors import INVALID_PARAMETER, VoxelloError
+
 HOOK = (
     Path(__file__).resolve().parents[1]
     / "src"
@@ -25,17 +31,97 @@ HOOK = (
     / "voxello-notification-hook.sh"
 )
 
-pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
+STDIN_MARKER = "--stdin--"
+
+# -- sentence selection (Python) ---------------------------------------------------------
+
+
+@pytest.mark.parametrize("language", ["it", "en"])
+def test_hook_text_maps_every_notification_type(language: str):
+    phrases = install.hook_phrases(language)
+    assert set(phrases) >= {
+        "permission_prompt",
+        "idle_prompt",
+        "agent_needs_input",
+        "agent_completed",
+        "elicitation_dialog",
+        "default",
+    }
+    for ntype, expected in phrases.items():
+        if ntype == "default":
+            continue
+        assert install.hook_text({"notification_type": ntype}, language) == expected
+    # Aliased type shares the sentence of its canonical key.
+    assert (
+        install.hook_text({"notification_type": "elicitation_url_dialog"}, language)
+        == phrases["elicitation_dialog"]
+    )
+    # Unknown type: the event's own message, else the default sentence.
+    assert install.hook_text({"notification_type": "brand_new", "message": "Custom"}, language) == (
+        "Custom"
+    )
+    assert install.hook_text({"notification_type": "brand_new"}, language) == phrases["default"]
+    assert install.hook_text({}, language) == phrases["default"]
+    assert (
+        install.hook_text({"notification_type": 42, "message": ["x"]}, language)
+        == (phrases["default"])
+    )
+
+
+def test_hook_text_is_truncated_and_stripped():
+    long = "x" * 400
+    assert install.hook_text({"notification_type": "new", "message": f"  {long}  "}, "en") == (
+        "x" * install.HOOK_TEXT_MAX_CHARS
+    )
+    assert (
+        install.hook_text({"notification_type": "new", "message": "   "}, "en")
+        == (install.hook_phrases("en")["default"])
+    )
+
+
+def test_hook_text_rejects_unknown_language():
+    with pytest.raises(VoxelloError) as exc:
+        install.hook_text({"notification_type": "idle_prompt"}, "xx")
+    assert exc.value.code == INVALID_PARAMETER
+
+
+def test_parse_hook_payload_tolerates_garbage():
+    assert install.parse_hook_payload("") == {}
+    assert install.parse_hook_payload("   \n") == {}
+    assert install.parse_hook_payload("{not json") == {}
+    assert install.parse_hook_payload("[1, 2]") == {}
+    assert install.parse_hook_payload('{"notification_type": "idle_prompt"}') == {
+        "notification_type": "idle_prompt"
+    }
+
+
+def test_message_files_have_the_same_keys():
+    keys = {lang: set(install.hook_phrases(lang)) for lang in install.hook_languages()}
+    assert len(set(map(frozenset, keys.values()))) == 1, keys
+
+
+# -- the bash script ----------------------------------------------------------------------
+
+bash_only = pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
 
 
 def _fake_command(bin_dir: Path, name: str, log: Path) -> None:
     bin_dir.mkdir(parents=True, exist_ok=True)
     script = bin_dir / name
-    # Each argument on its own line, so tests can split unambiguously.
+    # Each argument on its own line, then a marker and whatever arrived on stdin.
     script.write_text(
-        f'#!/usr/bin/env bash\nfor a in "$@"; do printf \'%s\\n\' "$a"; done >> "{log}"\n'
+        "#!/usr/bin/env bash\n"
+        f'{{ for a in "$@"; do printf \'%s\\n\' "$a"; done; printf \'%s\\n\' "{STDIN_MARKER}"; '
+        f'cat; }} >> "{log}"\n'
     )
     script.chmod(0o755)
+
+
+def _recorded(log: Path) -> tuple[list[str], str]:
+    """(arguments, stdin) as seen by the fake command."""
+    lines = log.read_text().split("\n")
+    marker = lines.index(STDIN_MARKER)
+    return lines[:marker], "\n".join(lines[marker + 1 :]).strip()
 
 
 def _run(hook: Path, payload: dict[str, str], *, path: str, home: Path, **env: str):
@@ -55,40 +141,34 @@ def _run(hook: Path, payload: dict[str, str], *, path: str, home: Path, **env: s
 
 
 def _system_path() -> str:
-    """A PATH with bash, python3 and (if installed) jq, but without any real ``voxello``.
+    """A PATH with bash but without any real ``voxello``.
 
     ``uv run`` prepends the project venv (which contains ``voxello``) to PATH, so the
     caller's PATH cannot be reused for the fallback tests.
     """
-    dirs = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
-    jq = shutil.which("jq")
-    if jq:
-        dirs.append(str(Path(jq).parent))
-    return os.pathsep.join(dirs)
+    return os.pathsep.join(["/usr/bin", "/bin", "/usr/sbin", "/sbin"])
 
 
-def test_uses_voxello_on_path_english(tmp_path: Path):
+@bash_only
+def test_uses_voxello_on_path_and_passes_language_channels_and_stdin(tmp_path: Path):
     log = tmp_path / "args.log"
     _fake_command(tmp_path / "bin", "voxello", log)
+    payload = {"notification_type": "permission_prompt", "message": "May I?"}
     result = _run(
         HOOK,
-        {"notification_type": "permission_prompt"},
+        payload,
         path=f"{tmp_path / 'bin'}{os.pathsep}{_system_path()}",
         home=tmp_path,
         VOXELLO_HOOK_LANG="en",
     )
     assert result.returncode == 0, result.stderr
-    assert log.read_text().splitlines() == [
-        "notify",
-        "Claude Code is asking for permission to continue.",
-        "--channels",
-        "voice,desktop",
-        "--priority",
-        "high",
-        "--cache",
-    ]
+    assert result.stdout == "", "voxello's stdout is discarded by the hook"
+    args, stdin = _recorded(log)
+    assert args == ["hook", "notification", "--language", "en", "--channels", "voice,desktop"]
+    assert json.loads(stdin) == payload, "the Notification JSON must reach voxello unchanged"
 
 
+@bash_only
 def test_default_language_is_italian_and_channels_override(tmp_path: Path):
     log = tmp_path / "args.log"
     _fake_command(tmp_path / "bin", "voxello", log)
@@ -100,56 +180,21 @@ def test_default_language_is_italian_and_channels_override(tmp_path: Path):
         VOXELLO_HOOK_CHANNELS="desktop",
     )
     assert result.returncode == 0, result.stderr
-    args = log.read_text().splitlines()
-    assert args[1] == "Claude Code ha finito e aspetta una tua risposta."
-    assert args[2:4] == ["--channels", "desktop"]
-    assert args[-1] == "--cache"
+    args, _ = _recorded(log)
+    assert args == ["hook", "notification", "--language", "it", "--channels", "desktop"]
 
 
-@pytest.mark.parametrize("language", ["it", "en"])
-def test_hook_sentences_match_message_files(tmp_path: Path, language: str):
-    """The bash script keeps a copy of the message YAML until roadmap 3.3; keep them equal."""
-    from voxello.install import hook_phrases
-
-    phrases = hook_phrases(language)
-    assert set(phrases) >= {
-        "permission_prompt",
-        "idle_prompt",
-        "agent_needs_input",
-        "agent_completed",
-        "elicitation_dialog",
-        "default",
-    }
-    cases = {k: v for k, v in phrases.items() if k != "default"}
-    cases["elicitation_url_dialog"] = phrases["elicitation_dialog"]
-    cases["something_unknown"] = phrases["default"]
-    for ntype, expected in cases.items():
-        log = tmp_path / f"{ntype}.log"
-        _fake_command(tmp_path / "bin", "voxello", log)
-        result = _run(
-            HOOK,
-            {"notification_type": ntype},
-            path=f"{tmp_path / 'bin'}{os.pathsep}{_system_path()}",
-            home=tmp_path,
-            VOXELLO_HOOK_LANG=language,
-        )
-        assert result.returncode == 0, result.stderr
-        assert log.read_text().splitlines()[1] == expected, ntype
+@bash_only
+def test_script_has_no_sentences_of_its_own():
+    """Roadmap 3.3: adding a language must not require touching the script."""
+    text = HOOK.read_text()
+    for language in install.hook_languages():
+        for sentence in install.hook_phrases(language).values():
+            assert sentence not in text
+    assert "jq" not in text and "python3" not in text
 
 
-def test_unknown_type_falls_back_to_message(tmp_path: Path):
-    log = tmp_path / "args.log"
-    _fake_command(tmp_path / "bin", "voxello", log)
-    result = _run(
-        HOOK,
-        {"notification_type": "something_new", "message": "Custom text"},
-        path=f"{tmp_path / 'bin'}{os.pathsep}{_system_path()}",
-        home=tmp_path,
-    )
-    assert result.returncode == 0, result.stderr
-    assert log.read_text().splitlines()[1] == "Custom text"
-
-
+@bash_only
 def test_falls_back_to_local_bin(tmp_path: Path):
     log = tmp_path / "args.log"
     _fake_command(tmp_path / ".local" / "bin", "voxello", log)
@@ -161,9 +206,11 @@ def test_falls_back_to_local_bin(tmp_path: Path):
         VOXELLO_HOOK_LANG="en",
     )
     assert result.returncode == 0, result.stderr
-    assert log.read_text().splitlines()[1] == "A Claude agent has completed its work."
+    args, _ = _recorded(log)
+    assert args[:4] == ["hook", "notification", "--language", "en"]
 
 
+@bash_only
 def test_falls_back_to_voxello_repo_with_uv(tmp_path: Path):
     log = tmp_path / "args.log"
     _fake_command(tmp_path / "bin", "uv", log)
@@ -183,11 +230,11 @@ def test_falls_back_to_voxello_repo_with_uv(tmp_path: Path):
         VOXELLO_HOOK_LANG="en",
     )
     assert result.returncode == 0, result.stderr
-    args = log.read_text().splitlines()
-    assert args[:5] == ["run", "--directory", str(repo), "voxello", "notify"]
-    assert args[5] == "Claude Code is asking for permission to continue."
+    args, _ = _recorded(log)
+    assert args[:6] == ["run", "--directory", str(repo), "voxello", "hook", "notification"]
 
 
+@bash_only
 def test_runs_from_checkout_copy_without_path(tmp_path: Path):
     """The mirror copy in .claude/hooks finds the checkout it lives in."""
     log = tmp_path / "args.log"
@@ -201,10 +248,11 @@ def test_runs_from_checkout_copy_without_path(tmp_path: Path):
         home=tmp_path,
     )
     assert result.returncode == 0, result.stderr
-    args = log.read_text().splitlines()
+    args, _ = _recorded(log)
     assert args[:3] == ["run", "--directory", str(repo)]
 
 
+@bash_only
 def test_logs_and_exits_when_nothing_found(tmp_path: Path):
     hook = tmp_path / "hooks" / HOOK.name
     hook.parent.mkdir()
@@ -220,6 +268,7 @@ def test_logs_and_exits_when_nothing_found(tmp_path: Path):
     assert result.stdout == ""
 
 
+@bash_only
 def test_hook_is_valid_bash():
     assert subprocess.run(["bash", "-n", str(HOOK)], check=False).returncode == 0
     assert shlex.split(HOOK.read_text().splitlines()[0]) == ["#!/usr/bin/env", "bash"]

@@ -117,14 +117,29 @@ whose per-request value simply replaces that argument of `CacheKeyParts`.
 - Test the `notify` path with cache enabled and a failing `FakeProvider`: a hit must work even
   with the TTS unreachable (useful for alerts when the server is down).
 
-## Milestone 3 — Per-request language selection
+## Milestone 3 — Per-request language selection (done 2026-09-17)
 
 Goal: choose `it` or `en` per call and get consistent phrases and pronunciation.
 
-Today the language is global only (`tts.voicestudio.language`, default `it`) and is sent to
-the server as a pronunciation hint. It is exposed neither by the MCP tools, nor by the CLI, nor
-by the hook, which picks the phrase per language but leaves the TTS in Italian even when it
-speaks English.
+Before this milestone the language was global only (`tts.voicestudio.language`, default `it`)
+and was sent to the server as a pronunciation hint. It was exposed neither by the MCP tools, nor
+by the CLI, nor by the hook, which picked the phrase per language but left the TTS in Italian
+even when it spoke English.
+
+Delivered: `language` on `TTSProvider.synthesize`, `VoxelloService.speak`/`notify`, the MCP
+tools (with `INSTRUCTIONS` asking agents to pass it) and the CLI (`--language/-l` on `speak`,
+`notify`, `cache warm`); validation `^[a-z]{2}$` after strip/lowercase with the `invalid_language`
+code; `language` in `RequestRecord`, `SpeechResult` and `StatusReport`; `speech.default_language`
+(alias `VOXELLO_LANGUAGE`) with `tts.voicestudio.language` kept as a deprecated fallback that
+logs a warning; `speech.voices_by_language` with the precedence below, resolved in the service so
+provider and cache key see the same voice; `doctor` lines for both. Deviation for 3.3: the hook
+script does not parse YAML (it has no parser and `install` does not copy the message files);
+instead it execs the new `voxello hook notification --language --channels` command, which reads
+the Notification JSON from stdin and picks the sentence with `install.hook_text()` from the
+package message files, so adding a language is still just adding a YAML file and the script
+needs neither `jq` nor `python3`. The sync test was dropped; the bash tests check the arguments
+and stdin passed to a fake `voxello` and stay in the default suite (they only need `bash`), not
+under `integration` as 3.4 suggested, so CI keeps running them.
 
 ### 3.1 `language` as a request parameter
 
@@ -205,14 +220,14 @@ In estimated order of usefulness, all at the same low priority until milestones 
 
 | Step | Item | Reason |
 |------|------|--------|
-| 1 | 3.1 | Small; language becomes a per-request argument of the cache key |
+| 1 | 3.1 | Done: language is a per-request argument and part of the cache key |
 | 2 | 2.1 + 2.2 | Done: reduces server load for repeated alerts |
-| 3 | 3.3 | Hook passes language; script reads the message files |
+| 3 | 3.3 | Done: hook passes language; sentences come from the message files |
 | 4 | 1.1 + 1.2 | Done: global tool installation, hook independent of the checkout |
-| 5 | 3.2, 1.3 | Polish (`warm` and 1.3 are done) |
+| 5 | 3.2, 1.3 | Done: `voices_by_language`, `warm`, 1.3 |
 | 6 | Milestone 4 | CI and robustness before publishing |
 | 7 | Milestone 5 | On demand |
 
-Items 3.1 and 2.x should be done before publishing (1.1) because they change the MCP tool
-signatures and the configuration layout: better to do that before external installations
-exist that would need migrating.
+Items 3.1 and 2.x were done before the first PyPI release (1.1) because they change the MCP
+tool signatures and the configuration layout: better to do that before external installations
+exist that would need migrating. Next: milestone 4.

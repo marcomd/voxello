@@ -31,13 +31,15 @@ class FakeProvider:
     name = "fake"
 
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str | None]] = []
+        self.calls: list[tuple[str, str | None, str | None]] = []
         self.fail_with: VoxelloError | None = None
         self.duration_ms = 500
         self.delay = 0.0
 
-    async def synthesize(self, text: str, voice: str | None = None) -> SynthesisResult:
-        self.calls.append((text, voice))
+    async def synthesize(
+        self, text: str, voice: str | None = None, language: str | None = None
+    ) -> SynthesisResult:
+        self.calls.append((text, voice, language))
         if self.delay:
             await asyncio.sleep(self.delay)
         if self.fail_with is not None:

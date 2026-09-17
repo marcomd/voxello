@@ -5,12 +5,15 @@ Precedence (highest wins): environment variables > YAML config file > defaults.
 Environment variables use the ``VOXELLO_`` prefix with ``__`` for nesting, e.g.
 ``VOXELLO_TTS__VOICESTUDIO__BASE_URL``. The flat aliases from the specification are
 also honoured: ``VOXELLO_TTS_PROVIDER``, ``VOXELLO_VOICESTUDIO_URL``,
-``VOXELLO_VOICESTUDIO_API_KEY``, ``VOXELLO_DEFAULT_VOICE``, ``VOXELLO_LOG_LEVEL``.
+``VOXELLO_VOICESTUDIO_API_KEY``, ``VOXELLO_DEFAULT_VOICE``, ``VOXELLO_LANGUAGE``,
+``VOXELLO_LOG_LEVEL``.
 """
 
 from __future__ import annotations
 
+import logging
 import os
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -19,8 +22,14 @@ from platformdirs import user_cache_dir, user_config_dir
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
+log = logging.getLogger(__name__)
+
 APP_NAME = "voxello"
 CONFIG_ENV_VAR = "VOXELLO_CONFIG"
+
+# ISO 639-1: two lowercase letters (roadmap 3.1). Shared with the service's validation.
+LANGUAGE_PATTERN = r"^[a-z]{2}$"
+LANGUAGE_RE = re.compile(LANGUAGE_PATTERN)
 
 # Flat env aliases from the spec -> dotted path in the settings tree.
 FLAT_ENV_ALIASES: dict[str, tuple[str, ...]] = {
@@ -28,6 +37,7 @@ FLAT_ENV_ALIASES: dict[str, tuple[str, ...]] = {
     "VOXELLO_VOICESTUDIO_URL": ("tts", "voicestudio", "base_url"),
     "VOXELLO_VOICESTUDIO_API_KEY": ("tts", "voicestudio", "api_key"),
     "VOXELLO_DEFAULT_VOICE": ("tts", "voicestudio", "voice"),
+    "VOXELLO_LANGUAGE": ("speech", "default_language"),
     "VOXELLO_LOG_LEVEL": ("logging", "level"),
 }
 
@@ -48,7 +58,12 @@ class VoiceStudioSettings(BaseModel):
         "('default' on VoiceStudio, 'auto' on omnivoice-server).",
     )
     engine: str = Field(default="omnivoice", description="VoiceStudio TTS engine ('model' field).")
-    language: str | None = Field(default="it", description="ISO 639-1 language hint.")
+    language: str | None = Field(
+        default=None,
+        pattern=LANGUAGE_PATTERN,
+        description="Deprecated since 0.3: use speech.default_language. Still honoured as the "
+        "default when speech.default_language is not set.",
+    )
     speed: float | None = Field(default=None, ge=0.25, le=4.0)
     num_step: int | None = Field(default=None, ge=1, le=128)
     guidance_scale: float | None = Field(default=None, ge=0, le=20)
@@ -63,6 +78,35 @@ class VoiceStudioSettings(BaseModel):
 class TTSSettings(BaseModel):
     provider: Literal["voicestudio"] = "voicestudio"
     voicestudio: VoiceStudioSettings = Field(default_factory=VoiceStudioSettings)
+
+
+class SpeechSettings(BaseModel):
+    """Language defaults and per-language voices (roadmap 3.1 / 3.2)."""
+
+    default_language: str = Field(
+        default="it",
+        pattern=LANGUAGE_PATTERN,
+        description="ISO 639-1 code used when a request does not pass `language`.",
+    )
+    voices_by_language: dict[str, str] = Field(
+        default_factory=dict,
+        description="Voice id per language, used when a request passes no explicit voice. "
+        "Precedence: request voice > voices_by_language[language] > tts.voicestudio.voice "
+        "> server default.",
+    )
+
+    @field_validator("voices_by_language")
+    @classmethod
+    def _check_map(cls, value: dict[str, str]) -> dict[str, str]:
+        for language, voice in value.items():
+            if not LANGUAGE_RE.fullmatch(language):
+                raise ValueError(
+                    f"speech.voices_by_language key '{language}' must be a two-letter ISO 639-1 "
+                    "code such as 'it' or 'en'"
+                )
+            if not voice or not voice.strip():
+                raise ValueError(f"speech.voices_by_language['{language}'] must name a voice")
+        return value
 
 
 class PlaybackSettings(BaseModel):
@@ -152,6 +196,7 @@ class Settings(BaseSettings):
 
     server: ServerSettings = Field(default_factory=ServerSettings)
     tts: TTSSettings = Field(default_factory=TTSSettings)
+    speech: SpeechSettings = Field(default_factory=SpeechSettings)
     playback: PlaybackSettings = Field(default_factory=PlaybackSettings)
     notifications: NotificationsSettings = Field(default_factory=NotificationsSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
@@ -166,6 +211,32 @@ class Settings(BaseSettings):
         # only works while the two directories differ.
         if self.cache.resolved_directory().resolve() == self.storage.resolved_temp_dir().resolve():
             raise ValueError("cache.directory must differ from storage.temp_dir")
+        return self
+
+    @model_validator(mode="after")
+    def _migrate_deprecated_language(self) -> Settings:
+        """``tts.voicestudio.language`` moved to ``speech.default_language`` (roadmap 3.1).
+
+        The old key keeps working as the default, unless the new one is set explicitly. The
+        warning goes through logging (stderr), never stdout, which carries the MCP protocol.
+        """
+        legacy = self.tts.voicestudio.language
+        if legacy is None:
+            return self
+        if "default_language" in self.speech.model_fields_set:
+            log.warning(
+                "tts.voicestudio.language is deprecated and ignored because "
+                "speech.default_language is set; remove it from the configuration."
+            )
+        else:
+            self.speech = SpeechSettings.model_validate(
+                {**self.speech.model_dump(), "default_language": legacy}
+            )
+            log.warning(
+                "tts.voicestudio.language is deprecated; move it to speech.default_language "
+                "(using '%s' as the default language for now).",
+                legacy,
+            )
         return self
 
     @classmethod
@@ -246,8 +317,13 @@ tts:
     # api_key: "change-me"              # required when VoiceStudio is on another host
     # voice: alloy                      # omit for the server default; VoiceStudio: profile id
     engine: omnivoice                   # VoiceStudio: voxcpm2, cosyvoice, mlx-audio, kittentts, ...
-    language: it
     timeout_seconds: 120
+
+speech:
+  default_language: it                  # ISO 639-1; agents pass `language` per request
+  # voices_by_language:                 # voice used when a request passes no voice
+  #   it: italian_voice
+  #   en: english_voice
 
 playback:
   enabled: true

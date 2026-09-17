@@ -32,7 +32,11 @@ class ProviderHealth:
 class TTSProvider(Protocol):
     name: str
 
-    async def synthesize(self, text: str, voice: str | None = None) -> SynthesisResult: ...
+    async def synthesize(
+        self, text: str, voice: str | None = None, language: str | None = None
+    ) -> SynthesisResult:
+        """Synthesize ``text``; ``language`` is the ISO 639-1 code of the text (roadmap 3.1)."""
+        ...
 
     async def list_voices(self) -> list[VoiceInfo]: ...
 

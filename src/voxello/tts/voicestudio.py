@@ -58,7 +58,7 @@ class VoiceStudioProvider:
     def base_url(self) -> str:
         return self.settings.base_url
 
-    def _payload(self, text: str, voice: str | None) -> dict[str, Any]:
+    def _payload(self, text: str, voice: str | None, language: str | None = None) -> dict[str, Any]:
         s = self.settings
         payload: dict[str, Any] = {
             "input": text,
@@ -67,7 +67,9 @@ class VoiceStudioProvider:
         }
         optional = {
             "voice": voice or s.voice,
-            "language": s.language,
+            # The request language wins; the deprecated tts.voicestudio.language is the last
+            # fallback for callers that bypass the service (roadmap 3.1).
+            "language": language if language is not None else s.language,
             "speed": s.speed,
             "num_step": s.num_step,
             "guidance_scale": s.guidance_scale,
@@ -75,12 +77,14 @@ class VoiceStudioProvider:
         payload.update({k: v for k, v in optional.items() if v is not None})
         return payload
 
-    async def synthesize(self, text: str, voice: str | None = None) -> SynthesisResult:
+    async def synthesize(
+        self, text: str, voice: str | None = None, language: str | None = None
+    ) -> SynthesisResult:
         if len(text) > MAX_INPUT_CHARS:
             raise VoxelloError(
                 TTS_PROVIDER_ERROR, f"VoiceStudio accepts at most {MAX_INPUT_CHARS} characters."
             )
-        payload = self._payload(text, voice)
+        payload = self._payload(text, voice, language)
         try:
             response = await self._client.post(SPEECH_PATH, json=payload)
         except (httpx2.ConnectError, httpx2.TimeoutException, httpx2.NetworkError) as exc:

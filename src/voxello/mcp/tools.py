@@ -84,6 +84,16 @@ def register_tools(mcp: MCPServer, holder: ServiceHolder) -> None:
                 )
             ),
         ] = None,
+        language: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "ISO 639-1 code of the language the text is written in (e.g. 'it', 'en'). "
+                    "Pass it whenever you know it so pronunciation matches the text; omit for "
+                    "the configured default."
+                )
+            ),
+        ] = None,
     ) -> SpeechResult:
         service = holder.get()
         try:
@@ -96,6 +106,7 @@ def register_tools(mcp: MCPServer, holder: ServiceHolder) -> None:
                 mode=mode,
                 client_id=client_id,
                 cache=cache,
+                language=language,
             )
         except VoxelloError as exc:
             raise ToolError(str(exc)) from exc
@@ -180,6 +191,16 @@ def register_tools(mcp: MCPServer, holder: ServiceHolder) -> None:
                 )
             ),
         ] = None,
+        language: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "ISO 639-1 code of the language the message is written in (e.g. 'it', "
+                    "'en'). Pass it whenever you know it so pronunciation matches the text; "
+                    "omit for the configured default."
+                )
+            ),
+        ] = None,
     ) -> NotifyResult:
         service = holder.get()
         try:
@@ -190,6 +211,7 @@ def register_tools(mcp: MCPServer, holder: ServiceHolder) -> None:
                 title=title,
                 client_id=client_id,
                 cache=cache,
+                language=language,
             )
         except VoxelloError as exc:
             raise ToolError(str(exc)) from exc

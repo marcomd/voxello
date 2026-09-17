@@ -67,7 +67,8 @@ tts:
   voicestudio:
     base_url: http://192.168.1.144:8880
     # voice: alloy          # omit for the server default; presets: alloy, ash, ballad, cedar, coral, echo, fable, marin, nova, onyx, sage, shimmer, verse
-    language: it
+speech:
+  default_language: it      # used when a request does not pass `language`
 ```
 
 With VoiceStudio on another host:
@@ -79,11 +80,29 @@ tts:
     api_key: "the key configured as OMNIVOICE_API_KEY on the VoiceStudio host"
     engine: omnivoice       # or voxcpm2, cosyvoice, mlx-audio, kittentts, moss-tts-nano
     # voice: <profile id>
-    language: it
+speech:
+  default_language: it
 ```
 
 Leave `voice` unset to use the server's default: VoiceStudio and omnivoice-server disagree on
 its name (`default` vs `auto`) and each rejects the other's.
+
+The language is chosen per request: agents pass `language` (ISO 639-1, `it`, `en`, ...) with the
+text, the CLI takes `--language/-l`, and `speech.default_language` covers calls that pass none.
+Cloned voices often sound best in one language, so an optional map picks the voice from the
+language when the request names none (an explicit `voice` still wins, then the map, then the
+global `voice`, then the server default):
+
+```yaml
+speech:
+  default_language: it
+  voices_by_language:
+    it: italian_voice
+    en: english_voice
+```
+
+`tts.voicestudio.language`, the global setting of earlier versions, is deprecated: it still acts
+as the default and `voxello doctor` reminds you to move it to `speech.default_language`.
 
 Phrases that repeat, such as the Claude Code hook alerts, are synthesized once and replayed from
 an on-disk audio cache. Notifications are cached by default, `speak` only on request, and only
@@ -99,7 +118,8 @@ cache:
 ```
 
 Environment variables override the file: `VOXELLO_VOICESTUDIO_URL`, `VOXELLO_VOICESTUDIO_API_KEY`,
-`VOXELLO_DEFAULT_VOICE`, `VOXELLO_LOG_LEVEL`, or any nested key as `VOXELLO_TTS__VOICESTUDIO__ENGINE`.
+`VOXELLO_DEFAULT_VOICE`, `VOXELLO_LANGUAGE`, `VOXELLO_LOG_LEVEL`, or any nested key as
+`VOXELLO_TTS__VOICESTUDIO__ENGINE`.
 `VOXELLO_CONFIG` points to an alternative config file. See `config.example.yaml` for every option.
 `voxello doctor` prints which config file it read and where it came from (`--config`,
 `VOXELLO_CONFIG` or the OS default), plus which executable and Python interpreter are running.
@@ -109,10 +129,12 @@ Environment variables override the file: `VOXELLO_VOICESTUDIO_URL`, `VOXELLO_VOI
 ```bash
 voxello doctor                                  # provider reachable? player? notifier?
 voxello speak "Build completata. Tutti i test passano."
+voxello speak "Build finished. All tests pass." --language en   # -l en: pronunciation follows the text
 voxello speak "Salvami" --save                  # also writes ~/Voxello/<timestamp>_<id>.wav
 voxello notify "Refactoring completato." --channels voice,desktop
 voxello notify "Build completata." --no-cache   # notify caches by default; speak needs --cache
 voxello cache warm --hook-phrases --language it # pre-synthesize the Claude Code hook sentences
+voxello cache warm --hook-phrases -l en         # the English ones, synthesized as English
 voxello cache warm phrases.txt                  # one phrase per line ('-' reads stdin)
 voxello cache list                              # hash, size, length, voice, last use; never the text
 voxello cache clear
@@ -176,14 +198,16 @@ explicitly with `/voice-notify`. The skill relies on the model to make the final
 below is the deterministic half.
 
 **Notification hook.** Claude Code fires a `Notification` event when it waits on a permission
-prompt or goes idle. The hook turns the event into a short spoken sentence ("Claude Code chiede un
-permesso per continuare.") and delivers it through `voxello notify`, so you hear it when you have
-walked away from the terminal. It looks for `voxello` on the PATH, then in `~/.local/bin`, then
-falls back to `uv run --directory "$VOXELLO_REPO"` if that variable points to a checkout; when none
-is available it logs to stderr and exits without speaking. It passes `--cache`, so each sentence
-is synthesized once and later alerts play even while the TTS server is down; run
-`voxello cache warm --hook-phrases --language it` (or `en`) so the very first alert is instant.
-This is the entry `voxello install claude` proposes for `~/.claude/settings.json`:
+prompt or goes idle. The hook script looks for `voxello` on the PATH, then in `~/.local/bin`, then
+falls back to `uv run --directory "$VOXELLO_REPO"` if that variable points to a checkout (when none
+is available it logs to stderr and exits without speaking) and hands the event to
+`voxello hook notification`. That command picks a short sentence for the notification type from
+the message files shipped in the package (`voxello/assets/claude/messages/it.yaml`, `en.yaml`),
+for example "Claude Code chiede un permesso per continuare.", and delivers it through `notify` in
+that language with `--cache`, so each sentence is synthesized once and later alerts play even
+while the TTS server is down; run `voxello cache warm --hook-phrases --language it` (or `en`) so
+the very first alert is instant. Adding a language is adding a message file. This is the entry
+`voxello install claude` proposes for `~/.claude/settings.json`:
 
 ```json
 {
@@ -226,17 +250,19 @@ project and by the agents' MCP configuration. `voxello doctor` reports which mod
 
 | Tool            | Purpose                                                               | Key parameters                                                                            |
 | --------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `speak`         | synthesize and play text                                              | `text`, `voice`, `interrupt` (default true), `save`, `play`, `mode`, `cache`, `client_id` |
+| `speak`         | synthesize and play text                                              | `text`, `language`, `voice`, `interrupt` (default true), `save`, `play`, `mode`, `cache`, `client_id` |
 | `stop_speaking` | stop playback and clear the queue                                     | optional `request_id`                                                                     |
 | `get_status`    | state, current request, queue, cache hits, provider and player health | none                                                                                      |
-| `notify`        | route a short message to `voice`, `desktop` and/or `file`             | `message`, `channels`, `priority`, `title`, `cache`                                       |
+| `notify`        | route a short message to `voice`, `desktop` and/or `file`             | `message`, `language`, `channels`, `priority`, `title`, `cache`                           |
 
-`speak` returns metadata (`request_id`, `status`, `duration_ms`, `saved_path`, `cached`), never
-audio. `cache` is tri-state: unset follows the policy (notifications yes, verbatim speech no),
-`true` caches a phrase the agent will repeat, `false` keeps one-off text out of the cache.
-Errors come back as tool errors with a stable code: `tts_provider_unavailable`,
-`tts_provider_unauthorized`, `voice_not_found`, `text_too_long`, `queue_full`,
-`playback_unavailable`, `notification_unavailable`.
+`speak` returns metadata (`request_id`, `status`, `duration_ms`, `saved_path`, `language`,
+`cached`), never audio. `language` is the ISO 639-1 code of the text (`it`, `en`); agents are asked
+to pass it so pronunciation follows the text, and it falls back to `speech.default_language`.
+`cache` is tri-state: unset follows the policy (notifications yes, verbatim speech no), `true`
+caches a phrase the agent will repeat, `false` keeps one-off text out of the cache. Errors come
+back as tool errors with a stable code: `tts_provider_unavailable`, `tts_provider_unauthorized`,
+`voice_not_found`, `invalid_language`, `text_too_long`, `queue_full`, `playback_unavailable`,
+`notification_unavailable`.
 
 ## How it behaves
 

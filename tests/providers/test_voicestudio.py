@@ -48,9 +48,33 @@ async def test_synthesize_sends_expected_payload_and_returns_wav():
         return httpx2.Response(200, content=wav, headers={"content-type": "audio/wav"})
 
     provider, _ = make_provider(handler, api_key=SecretStr("k"), num_step=16)
-    result = await provider.synthesize("Ciao", "marco")
+    result = await provider.synthesize("Ciao", "marco", "it")
     assert result.audio == wav and result.mime_type == "audio/wav" and result.voice == "marco"
     await provider.aclose()
+
+
+async def test_request_language_wins_over_deprecated_setting():
+    """Roadmap 3.1: the payload carries the request language, not the global one."""
+    seen: list[dict] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(json.loads(request.content))
+        return httpx2.Response(200, content=make_wav(10))
+
+    provider, _ = make_provider(handler, language="it")
+    await provider.synthesize("Hello", language="en")
+    await provider.synthesize("Ciao")
+    assert seen[0]["language"] == "en"
+    assert seen[1]["language"] == "it", "deprecated tts.voicestudio.language is the fallback"
+
+
+async def test_language_omitted_when_nothing_is_set():
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        assert "language" not in json.loads(request.content)
+        return httpx2.Response(200, content=make_wav(10))
+
+    provider, _ = make_provider(handler)
+    await provider.synthesize("x")
 
 
 async def test_voice_omitted_by_default_and_no_auth_header():

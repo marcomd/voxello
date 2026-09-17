@@ -12,6 +12,7 @@ from typing import Any
 INVALID_TEXT = "invalid_text"
 TEXT_TOO_LONG = "text_too_long"
 INVALID_PARAMETER = "invalid_parameter"
+INVALID_LANGUAGE = "invalid_language"  # roadmap 3.1: not a two-letter ISO 639-1 code
 VOICE_NOT_FOUND = "voice_not_found"
 TTS_PROVIDER_UNAVAILABLE = "tts_provider_unavailable"
 TTS_PROVIDER_UNAUTHORIZED = "tts_provider_unauthorized"

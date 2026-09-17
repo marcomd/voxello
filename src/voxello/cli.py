@@ -17,7 +17,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from voxello import __version__
+from voxello import __version__, install
 from voxello.config import (
     EXAMPLE_CONFIG,
     Settings,
@@ -46,6 +46,12 @@ def build_parser() -> argparse.ArgumentParser:
     speak = sub.add_parser("speak", help="Synthesize and play text without an agent")
     speak.add_argument("text", help="Text to speak")
     speak.add_argument("--voice", default=None)
+    speak.add_argument(
+        "--language",
+        "-l",
+        default=None,
+        help="ISO 639-1 code of the text (default: speech.default_language)",
+    )
     speak.add_argument("--save", action="store_true", help="Persist the audio file")
     speak.add_argument("--no-play", action="store_true", help="Do not play the audio")
     speak.add_argument(
@@ -67,6 +73,44 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Reuse cached audio for repeated phrases (default: on for notify)",
     )
+    notify.add_argument(
+        "--language",
+        "-l",
+        default=None,
+        help="ISO 639-1 code of the message (default: speech.default_language)",
+    )
+
+    hook = sub.add_parser(
+        "hook", help="Entry points for editor hooks (used by the Claude Code hook script)"
+    )
+    hook_sub = hook.add_subparsers(dest="hook_command", required=True)
+    hook_notification = hook_sub.add_parser(
+        "notification",
+        help="Speak a Claude Code Notification event read as JSON from stdin",
+        description=(
+            "Reads the Notification JSON that Claude Code pipes to its hooks, picks the "
+            "sentence for its notification_type from the package message files "
+            "(voxello/assets/claude/messages/<language>.yaml) and delivers it with "
+            "'notify --cache' in that language. Unknown types speak the event's own message."
+        ),
+    )
+    hook_notification.add_argument(
+        "--language",
+        "-l",
+        default=None,
+        help=f"Language of the sentence (default: ${install.HOOK_LANG_ENV_VAR} or it)",
+    )
+    hook_notification.add_argument(
+        "--channels",
+        default=None,
+        help=(
+            f"Comma-separated channels (default: ${install.HOOK_CHANNELS_ENV_VAR} or "
+            f"{install.HOOK_DEFAULT_CHANNELS})"
+        ),
+    )
+    hook_notification.add_argument(
+        "--priority", default="high", choices=["low", "normal", "high", "critical"]
+    )
 
     cache = sub.add_parser("cache", help="Inspect, clear or pre-fill the audio cache")
     cache_sub = cache.add_subparsers(dest="cache_command", required=True)
@@ -87,8 +131,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     warm.add_argument(
         "--language",
+        "-l",
         default=None,
-        help="Language of the hook sentences (default: $VOXELLO_HOOK_LANG or it)",
+        help=(
+            "ISO 639-1 code the phrases are synthesized in; with --hook-phrases it also picks "
+            "the message file (default: $VOXELLO_HOOK_LANG or it, else speech.default_language)"
+        ),
     )
     warm.add_argument("--voice", default=None, help="Voice id; omit for the configured default")
 
@@ -99,8 +147,8 @@ def build_parser() -> argparse.ArgumentParser:
     config_sub.add_parser("path", help="Print the resolved config path")
     config_sub.add_parser("show", help="Print the effective configuration")
 
-    install = sub.add_parser("install", help="Install Voxello integrations into other tools")
-    install_sub = install.add_subparsers(dest="install_command", required=True)
+    install_parser = sub.add_parser("install", help="Install Voxello integrations into other tools")
+    install_sub = install_parser.add_subparsers(dest="install_command", required=True)
     claude = install_sub.add_parser(
         "claude",
         help="Install the voice-notify skill and the Notification hook for Claude Code",
@@ -123,7 +171,7 @@ def build_parser() -> argparse.ArgumentParser:
     claude.add_argument("--no-hook", action="store_true", help="Do not install the hook")
     claude.add_argument(
         "--lang",
-        choices=["it", "en"],
+        choices=install.hook_languages(),
         default=None,
         help="Language of the spoken hook sentences (default: the hook's own default, Italian)",
     )
@@ -150,6 +198,8 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(cmd_speak(_load(args), args))
         if command == "notify":
             return asyncio.run(cmd_notify(_load(args), args))
+        if command == "hook":
+            return asyncio.run(cmd_hook(_load(args), args))
         if command == "config":
             return cmd_config(args)
         if command == "cache":
@@ -190,9 +240,11 @@ async def cmd_doctor(settings: Settings, config_path: Path | None) -> int:
     vs = settings.tts.voicestudio
     print(f"TTS provider: {settings.tts.provider} at {vs.base_url}")
     print(
-        f"  engine={vs.engine} voice={vs.voice or 'server-default'} language={vs.language} "
+        f"  engine={vs.engine} voice={vs.voice or 'server-default'} "
         f"api_key={'set' if vs.api_key else 'not set'}"
     )
+    for line in describe_speech(settings):
+        print(line)
 
     provider = VoiceStudioProvider(vs)
     try:
@@ -241,6 +293,21 @@ async def cmd_doctor(settings: Settings, config_path: Path | None) -> int:
     return 0 if ok else 1
 
 
+def describe_speech(settings: Settings) -> list[str]:
+    """``doctor`` lines for the language defaults (roadmap 3.1 / 3.2)."""
+    speech = settings.speech
+    line = f"  default_language={speech.default_language}"
+    if speech.voices_by_language:
+        pairs = ", ".join(f"{k}={v}" for k, v in sorted(speech.voices_by_language.items()))
+        line += f" voices_by_language: {pairs}"
+    lines = [line]
+    if settings.tts.voicestudio.language is not None:
+        lines.append(
+            "  DEPRECATED: tts.voicestudio.language is set; move it to speech.default_language"
+        )
+    return lines
+
+
 async def cmd_speak(settings: Settings, args: argparse.Namespace) -> int:
     from voxello.core.service import VoxelloService
 
@@ -254,6 +321,7 @@ async def cmd_speak(settings: Settings, args: argparse.Namespace) -> int:
             play=not args.no_play,
             interrupt=True,
             cache=args.cache,
+            language=args.language,
         )
         print(result.model_dump_json(indent=2))
         if service.playback is not None and not args.no_play:
@@ -263,15 +331,31 @@ async def cmd_speak(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
-async def cmd_notify(settings: Settings, args: argparse.Namespace) -> int:
+def _split_channels(raw: str) -> list[str]:
+    return [c.strip() for c in raw.split(",") if c.strip()]
+
+
+async def _deliver_notification(
+    settings: Settings,
+    message: str,
+    *,
+    channels: list[str],
+    priority: str,
+    cache: bool | None,
+    language: str | None,
+) -> int:
+    """Shared body of ``notify`` and ``hook notification``: deliver, print, wait, exit code."""
     from voxello.core.service import VoxelloService
 
-    channels = [c.strip() for c in args.channels.split(",") if c.strip()]
     service = VoxelloService.from_settings(settings)
     await service.start()
     try:
         result = await service.notify(
-            args.message, channels=channels, priority=args.priority, cache=args.cache
+            message,
+            channels=channels,
+            priority=priority,  # type: ignore[arg-type]
+            cache=cache,
+            language=language,
         )
         print(result.model_dump_json(indent=2))
         if service.playback is not None:
@@ -279,6 +363,49 @@ async def cmd_notify(settings: Settings, args: argparse.Namespace) -> int:
     finally:
         await service.aclose()
     return 0 if result.status != "failed" else 1
+
+
+async def cmd_notify(settings: Settings, args: argparse.Namespace) -> int:
+    return await _deliver_notification(
+        settings,
+        args.message,
+        channels=_split_channels(args.channels),
+        priority=args.priority,
+        cache=args.cache,
+        language=args.language,
+    )
+
+
+async def cmd_hook(settings: Settings, args: argparse.Namespace) -> int:
+    if args.hook_command == "notification":
+        return await cmd_hook_notification(settings, args)
+    return 2
+
+
+async def cmd_hook_notification(settings: Settings, args: argparse.Namespace) -> int:
+    """Claude Code Notification event (JSON on stdin) -> spoken sentence (roadmap 3.3).
+
+    The bash hook only resolves the ``voxello`` command and execs this; the sentence
+    selection lives in :func:`voxello.install.hook_text` so it has one source of truth.
+    """
+    language = (
+        args.language or os.environ.get(install.HOOK_LANG_ENV_VAR) or install.HOOK_DEFAULT_LANGUAGE
+    )
+    channels = _split_channels(
+        args.channels
+        or os.environ.get(install.HOOK_CHANNELS_ENV_VAR)
+        or install.HOOK_DEFAULT_CHANNELS
+    )
+    payload = install.parse_hook_payload(sys.stdin.read() if not sys.stdin.isatty() else "")
+    text = install.hook_text(payload, language)
+    return await _deliver_notification(
+        settings,
+        text,
+        channels=channels,
+        priority=args.priority,
+        cache=True,
+        language=language,
+    )
 
 
 def describe_cache(settings: Settings) -> str:
@@ -331,14 +458,21 @@ def cmd_cache(settings: Settings, args: argparse.Namespace) -> int:
     return 2
 
 
-def _read_phrases(args: argparse.Namespace) -> list[str]:
-    from voxello import install
+def _read_phrases(args: argparse.Namespace) -> tuple[list[str], str | None]:
+    """Phrases to warm and the language to synthesize them in (``None`` = default).
 
+    With ``--hook-phrases`` the language also selects the message file, so the English
+    sentences are cached under the English key (roadmap 3.1).
+    """
     if args.hook_phrases and args.source:
         raise VoxelloError(INVALID_PARAMETER, "Pass either FILE or --hook-phrases, not both.")
     if args.hook_phrases:
-        language = args.language or os.environ.get("VOXELLO_HOOK_LANG") or "it"
-        return list(dict.fromkeys(install.hook_phrases(language).values()))
+        language = (
+            args.language
+            or os.environ.get(install.HOOK_LANG_ENV_VAR)
+            or install.HOOK_DEFAULT_LANGUAGE
+        )
+        return list(dict.fromkeys(install.hook_phrases(language).values())), language
     if not args.source:
         raise VoxelloError(
             INVALID_PARAMETER, "Pass a FILE with one phrase per line, '-' or --hook-phrases."
@@ -348,13 +482,14 @@ def _read_phrases(args: argparse.Namespace) -> list[str]:
     except OSError as exc:
         raise VoxelloError(INVALID_PARAMETER, f"Could not read {args.source}: {exc}") from exc
     lines = [line.strip() for line in content.splitlines()]
-    return list(dict.fromkeys(line for line in lines if line and not line.startswith("#")))
+    phrases = list(dict.fromkeys(line for line in lines if line and not line.startswith("#")))
+    return phrases, args.language
 
 
 async def cmd_cache_warm(settings: Settings, args: argparse.Namespace) -> int:
     from voxello.core.service import VoxelloService
 
-    phrases = _read_phrases(args)
+    phrases, language = _read_phrases(args)
     if not phrases:
         print("No phrases to warm.", file=sys.stderr)
         return 1
@@ -365,7 +500,12 @@ async def cmd_cache_warm(settings: Settings, args: argparse.Namespace) -> int:
         for phrase in phrases:
             try:
                 result = await service.speak(
-                    phrase, voice=args.voice, play=False, mode="notification", cache=True
+                    phrase,
+                    voice=args.voice,
+                    play=False,
+                    mode="notification",
+                    cache=True,
+                    language=language,
                 )
             except VoxelloError as exc:
                 failed += 1
@@ -429,8 +569,6 @@ def cmd_install(args: argparse.Namespace) -> int:
 
 
 def cmd_install_claude(args: argparse.Namespace) -> int:
-    from voxello import install
-
     claude_dir = (args.claude_dir or install.default_claude_dir()).expanduser()
     print(f"Claude Code directory: {claude_dir}")
     if not args.no_skill:

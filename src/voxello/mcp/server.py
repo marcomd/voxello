@@ -19,9 +19,11 @@ INSTRUCTIONS = """\
 Voxello gives you a voice on the user's machine. Use `speak` to read a short summary or \
 answer aloud when the user asks for it, and `notify` when a long task finishes or needs \
 attention. Keep spoken text under about 20 seconds (one to three sentences); the textual \
-reply remains the place for details. Use `stop_speaking` to interrupt playback and \
-`get_status` to check what is playing and whether the TTS provider is reachable. \
-Voxello speaks exactly the text you pass; it never summarizes or rewrites it."""
+reply remains the place for details. Pass `language` (ISO 639-1, e.g. `it` or `en`) matching \
+the language the text is written in, so pronunciation is right; omit it for the configured \
+default. Use `stop_speaking` to interrupt playback and `get_status` to check what is playing \
+and whether the TTS provider is reachable. Voxello speaks exactly the text you pass; it never \
+summarizes or rewrites it."""
 
 
 def create_server(settings: Settings, service: VoxelloService | None = None) -> MCPServer:

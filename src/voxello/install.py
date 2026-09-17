@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -26,6 +27,13 @@ HOOK_FILENAME = "voxello-notification-hook.sh"
 HOOK_MATCHER = "permission_prompt|idle_prompt|agent_needs_input|elicitation_dialog"
 HOOK_TIMEOUT_SECONDS = 30
 HOOK_EVENT = "Notification"
+HOOK_LANG_ENV_VAR = "VOXELLO_HOOK_LANG"
+HOOK_CHANNELS_ENV_VAR = "VOXELLO_HOOK_CHANNELS"
+HOOK_DEFAULT_LANGUAGE = "it"
+HOOK_DEFAULT_CHANNELS = "voice,desktop"
+# Claude Code notification types that share a sentence with another key of the message files.
+HOOK_TYPE_ALIASES = {"elicitation_url_dialog": "elicitation_dialog"}
+HOOK_TEXT_MAX_CHARS = 250  # it is spoken: keep it short
 
 InstallStatus = Literal["installed", "updated", "unchanged"]
 
@@ -53,8 +61,10 @@ def hook_languages() -> list[str]:
 def hook_phrases(language: str) -> dict[str, str]:
     """The sentences the Notification hook speaks for ``language`` (roadmap 2.2 / 3.3).
 
-    Keys are Claude Code ``notification_type`` values plus ``default``. Used by
-    ``voxello cache warm --hook-phrases`` and by the tests that keep the bash script in sync.
+    Keys are Claude Code ``notification_type`` values plus ``default``. This is the single
+    source of the hook sentences: ``voxello hook notification`` picks from it and
+    ``voxello cache warm --hook-phrases`` pre-synthesizes it. Adding a language means adding
+    ``assets/claude/messages/<code>.yaml``; nothing else changes.
     """
     if language not in hook_languages():
         raise VoxelloError(
@@ -65,6 +75,41 @@ def hook_phrases(language: str) -> dict[str, str]:
     if not isinstance(loaded, dict):
         raise VoxelloError(INVALID_PARAMETER, f"Invalid hook phrases file for '{language}'.")
     return {str(k): str(v) for k, v in loaded.items()}
+
+
+def parse_hook_payload(raw: str) -> dict[str, Any]:
+    """The JSON object Claude Code pipes to a Notification hook; ``{}`` when unusable."""
+    if not raw.strip():
+        return {}
+    try:
+        loaded = json.loads(raw)
+    except ValueError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def hook_text(payload: Mapping[str, Any], language: str) -> str:
+    """The sentence to speak for a Claude Code Notification event (roadmap 3.3).
+
+    A known ``notification_type`` maps to its sentence in the message file; an unknown type
+    falls back to the event's own ``message``, then to the ``default`` sentence. The result
+    is truncated to ``HOOK_TEXT_MAX_CHARS`` because it is spoken.
+    """
+    phrases = hook_phrases(language)
+    ntype = payload.get("notification_type")
+    if isinstance(ntype, str):
+        ntype = HOOK_TYPE_ALIASES.get(ntype, ntype)
+    message = payload.get("message")
+    text = (
+        (phrases.get(ntype) if isinstance(ntype, str) else None)
+        or (message.strip() if isinstance(message, str) else "")
+        or phrases.get("default", "")
+    )
+    if not text:
+        raise VoxelloError(
+            INVALID_PARAMETER, f"No sentence for this notification in '{language}.yaml'."
+        )
+    return text[:HOOK_TEXT_MAX_CHARS]
 
 
 def default_claude_dir() -> Path:

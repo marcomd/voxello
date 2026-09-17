@@ -1,6 +1,6 @@
 # Spoken sentences for Claude Code Notification events (Italian).
 # Keys are Claude Code notification_type values; `default` covers unknown types with no message.
-# The hook script keeps its own copy of these sentences until roadmap 3.3; tests keep them in sync.
+# Read by `voxello hook notification` and `voxello cache warm --hook-phrases --language <code>`.
 permission_prompt: "Claude Code chiede un permesso per continuare."
 idle_prompt: "Claude Code ha finito e aspetta una tua risposta."
 agent_needs_input: "Un agente Claude ha bisogno di un tuo input."

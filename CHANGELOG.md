@@ -7,11 +7,50 @@ change the MCP tool signatures or the configuration layout.
 
 ## [Unreleased]
 
+Per-request language selection (roadmap milestone 3).
+
 ### Added
 
+- `language` parameter (ISO 639-1, e.g. `it`, `en`) on the `speak` and `notify` MCP tools, on
+  `VoxelloService.speak`/`notify` and on the CLI (`speak`, `notify`, `cache warm`, all with
+  `--language/-l`). The value is validated (`^[a-z]{2}$`, case-insensitive, new error code
+  `invalid_language`), sent to the TTS server as the pronunciation hint and reported back as
+  `language` in `SpeechResult`; `get_status` reports the default. The server instructions ask
+  agents to pass the language the text is written in.
+- `speech.default_language` (default `it`, env alias `VOXELLO_LANGUAGE`) for requests that pass
+  no language, and `speech.voices_by_language` mapping a voice to each language. Voice
+  precedence: request `voice`, then `voices_by_language[language]`, then `tts.voicestudio.voice`,
+  then the server default. The effective language and voice are part of the cache key, so the
+  same sentence in two languages is two entries.
+- `voxello hook notification`: reads a Claude Code `Notification` JSON from stdin, picks the
+  sentence for its type from `assets/claude/messages/<language>.yaml` (unknown types speak the
+  event's own message, then the `default` sentence, truncated to 250 characters) and delivers it
+  with `notify --cache` in that language. `--language`/`--channels` default to
+  `VOXELLO_HOOK_LANG`/`VOXELLO_HOOK_CHANNELS`.
+- `doctor` prints `default_language`, the `voices_by_language` map and a deprecation line when
+  `tts.voicestudio.language` is still set.
 - `docs/TUTORIAL.md`: step-by-step guide to installing and running `omnivoice-server` on Windows
   with an NVIDIA GPU and on Apple Silicon, testing it with curl, and pointing Voxello at it.
   Linked from the README.
+
+### Changed
+
+- The Claude Code hook script no longer contains the spoken sentences nor parses JSON (no `jq`
+  or `python3` needed): it only resolves the `voxello` command and execs
+  `voxello hook notification --language "$VOXELLO_HOOK_LANG" --channels "$VOXELLO_HOOK_CHANNELS"`.
+  Adding a hook language means adding a message file. `voxello install claude --lang` accepts
+  every language that has one. Re-run `voxello install claude` to update the installed copy.
+- `voxello cache warm --language` now also sets the TTS language of the warmed phrases, so the
+  English hook sentences are cached under the key the hook will look up.
+- The `voice-notify` skill passes `language` consistent with the message text.
+- `TTSProvider.synthesize(text, voice=None, language=None)`: the provider gained a `language`
+  argument; `VoiceStudioProvider` sends it in the payload and falls back to the deprecated
+  setting only when no language is given.
+
+### Deprecated
+
+- `tts.voicestudio.language`: use `speech.default_language`. The old key still works as the
+  default (with a warning on stderr) unless the new one is set, in which case it is ignored.
 
 ## [0.2.0] - 2026-09-17
 

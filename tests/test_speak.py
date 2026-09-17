@@ -22,7 +22,8 @@ async def test_speak_plays_and_reports_metadata(
     assert result.request_id.startswith("vox_")
     assert result.duration_ms == 500
     assert result.saved_path is None
-    assert provider.calls == [("Build completata.", None)]
+    assert result.language == "it"
+    assert provider.calls == [("Build completata.", None, "it")]
 
     handle = await player.wait_started()
     assert handle.path.exists()

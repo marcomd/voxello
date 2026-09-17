@@ -69,7 +69,10 @@ async def test_tools_are_listed_with_annotations(settings, stack):
         assert "text" in tools["speak"].input_schema["required"]
         assert "cache" in tools["speak"].input_schema["properties"]
         assert "cache" in tools["notify"].input_schema["properties"]
+        assert "language" in tools["speak"].input_schema["properties"]
+        assert "language" in tools["notify"].input_schema["properties"]
         assert "cached" in tools["speak"].output_schema["properties"]
+        assert "language" in tools["speak"].output_schema["properties"]
         assert "cache_hits" in tools["get_status"].output_schema["properties"]
 
 
@@ -80,8 +83,9 @@ async def test_speak_status_stop_round_trip(settings, stack):
         assert isinstance(result, CallToolResult) and not result.is_error
         assert result.structured_content["status"] == "playing"
         assert result.structured_content["cached"] is False
+        assert result.structured_content["language"] == "it"
         request_id = result.structured_content["request_id"]
-        assert provider.calls[0][0] == "Ciao dal test"
+        assert provider.calls[0] == ("Ciao dal test", None, "it")
         await player.wait_started()
 
         status = await session.call_tool("get_status", {})
@@ -119,6 +123,26 @@ async def test_notify_round_trip(settings, stack):
         assert result.structured_content["channels"] == {"voice": "playing", "desktop": "sent"}
         assert notifier.sent == [("Voxello", "Fatto.")]
         await player.wait_started()
+
+
+async def test_language_parameter_reaches_the_provider(settings, stack):
+    provider, player, _, service = stack
+    async with connected(settings, service) as session:
+        result = await session.call_tool("speak", {"text": "Hello there", "language": "en"})
+        assert not result.is_error
+        assert result.structured_content["language"] == "en"
+        assert provider.calls[0] == ("Hello there", None, "en")
+        await player.wait_started()
+
+        result = await session.call_tool(
+            "notify", {"message": "Done.", "channels": ["voice"], "language": "en"}
+        )
+        assert not result.is_error
+        assert provider.calls[1] == ("Done.", None, "en")
+
+        bad = await session.call_tool("speak", {"text": "x", "language": "english"})
+        assert bad.is_error
+        assert "invalid_language" in text_of(bad)
 
 
 async def test_invalid_arguments_are_rejected(settings, stack):

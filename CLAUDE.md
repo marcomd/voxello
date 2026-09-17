@@ -22,8 +22,9 @@ uv run pytest -m integration tests/integration    # real afplay; real TTS if VOX
 uv run ruff check src tests && uv run ruff format --check src tests
 uv run pyright src                                # pyright only covers src/, not tests/
 uv run voxello doctor                             # check config, TTS server, player, notifier
-uv run voxello speak "text" [--save] [--cache]
-uv run voxello notify "text" --channels voice,desktop [--no-cache]
+uv run voxello speak "text" [--save] [--cache] [-l en]
+uv run voxello notify "text" --channels voice,desktop [--no-cache] [-l en]
+echo '{"notification_type":"idle_prompt"}' | uv run voxello hook notification -l it   # what the Claude Code hook runs
 uv run voxello cache list|clear                   # audio cache: hash, size, chars, voice, last use
 uv run voxello cache warm --hook-phrases --language it|en   # or: cache warm FILE, cache warm -
 uv run voxello serve                              # MCP server over stdio (what agents run)
@@ -54,7 +55,12 @@ Layers, top to bottom, each depending only on the ones below:
   cached by default, verbatim only on request, never outside `cache.min/max_text_chars`), the
   lookup runs before `_synth_lock` so a hit never waits on the TTS server, and a miss stores the
   WAV after synthesis (a store failure is logged, never raised). Hits play the cache file in
-  place and count in `StatusReport.cache_hits`.
+  place and count in `StatusReport.cache_hits`. `speak`/`notify` also take `language: str | None`
+  (roadmap 3.1): `_validate_language` strips, lowercases and checks `^[a-z]{2}$`
+  (`invalid_language`), falling back to `speech.default_language`; `_resolve_voice` fixes the
+  effective voice once (request `voice` > `speech.voices_by_language[language]` >
+  `tts.voicestudio.voice` > `None` for the server default) so the provider call and the cache
+  key see the same voice and language. `SpeechResult.language` reports the effective code.
 - `storage/cache.py` (`AudioCache`) keys entries by SHA-256 of `CacheKeyParts` (normalized text,
   effective voice, engine, language, speed, num_step, guidance_scale, base_url); files are
   `<hash>.wav` plus a `<hash>.json` sidecar (voice label, provider, text length, never the text).
@@ -72,7 +78,10 @@ Layers, top to bottom, each depending only on the ones below:
   (`VOICES_PATHS`, `ENGINES_PATHS`). HTTP failures are translated into stable error codes.
 - `notifications/desktop.py` picks `terminal-notifier`, `osascript`, `notify-send` or PowerShell.
 - `config.py` uses `pydantic-settings` with a YAML file (path from `platformdirs`, override with
-  `VOXELLO_CONFIG`) and `VOXELLO_*` env vars, nested keys with `__`.
+  `VOXELLO_CONFIG`) and `VOXELLO_*` env vars, nested keys with `__`. `speech.default_language`
+  (alias `VOXELLO_LANGUAGE`) and `speech.voices_by_language` hold the language defaults;
+  `tts.voicestudio.language` is deprecated and migrated into `speech.default_language` by a
+  `Settings` validator that logs a warning (never prints).
 - `errors.py`: every layer raises `VoxelloError(code, message)`; codes are the stable contract shown
   to agents and printed by the CLI. Add new codes there rather than raising ad hoc exceptions.
 
@@ -106,15 +115,18 @@ only writes the hook entry into `settings.json` with `--yes` or an interactive c
 `.claude/skills/voice-notify/SKILL.md` and `.claude/hooks/voxello-notification-hook.sh` are
 byte-identical mirrors for working inside this checkout; `tests/test_install.py` fails if they
 drift, so edit the package copy and re-copy. The skill makes Claude end a task with one `notify`
-call when the user asks to be told by voice. The hook turns Claude Code `Notification` events into
-a spoken sentence via `voxello notify --cache` (Italian by default, `VOXELLO_HOOK_LANG=en`,
-`VOXELLO_HOOK_CHANNELS=desktop` to silence); it prefers `voxello` on the PATH, then
-`~/.local/bin/voxello`, then `uv run --directory "$VOXELLO_REPO"`, then the checkout it lives in.
-Both are registered at user scope, not in a project `.mcp.json` (Claude Code warns on duplicate
-scopes). The hook sentences also live in `src/voxello/assets/claude/messages/{it,en}.yaml`, read
-by `install.hook_phrases()` for `voxello cache warm --hook-phrases`; `tests/test_hook.py` fails if
-the bash script's hardcoded copies drift from the YAML (roadmap 3.3 will make the script read
-them).
+call when the user asks to be told by voice, passing `language` consistent with the message. The
+hook script only resolves the CLI (it prefers `voxello` on the PATH, then `~/.local/bin/voxello`,
+then `uv run --directory "$VOXELLO_REPO"`, then the checkout it lives in) and execs
+`voxello hook notification --language "$VOXELLO_HOOK_LANG" --channels "$VOXELLO_HOOK_CHANNELS"`
+with the Notification JSON on stdin (Italian by default, `VOXELLO_HOOK_LANG=en`,
+`VOXELLO_HOOK_CHANNELS=desktop` to silence). That command (`cli.cmd_hook_notification`) picks the
+sentence with `install.hook_text()` from `src/voxello/assets/claude/messages/{it,en}.yaml`, the
+single source of the hook sentences, also read by `voxello cache warm --hook-phrases`; the script
+contains no sentences and needs neither `jq` nor `python3`, so adding a language is adding a YAML
+file (`tests/test_hook.py` checks the script stays free of sentences and that every message file
+has the same keys). Both are registered at user scope, not in a project `.mcp.json` (Claude Code
+warns on duplicate scopes).
 
 ## Releasing
 
