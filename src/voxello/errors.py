@@ -21,6 +21,7 @@ PLAYBACK_ERROR = "playback_error"
 QUEUE_FULL = "queue_full"
 NOTIFICATION_UNAVAILABLE = "notification_unavailable"
 STORAGE_ERROR = "storage_error"
+INVALID_SETTINGS_FILE = "invalid_settings_file"
 
 
 class VoxelloError(Exception):

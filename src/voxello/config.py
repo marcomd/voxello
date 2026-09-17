@@ -150,13 +150,22 @@ def default_config_path() -> Path:
     return Path(user_config_dir(APP_NAME)) / "config.yaml"
 
 
-def resolve_config_path(explicit: Path | None = None) -> Path:
+def describe_config_path(explicit: Path | None = None) -> tuple[Path, str]:
+    """Return the config path and where it came from (for ``doctor``).
+
+    Precedence: explicit ``--config`` argument, then ``VOXELLO_CONFIG``, then the
+    per-user config directory chosen by ``platformdirs``.
+    """
     if explicit is not None:
-        return explicit.expanduser()
+        return explicit.expanduser(), "--config"
     env_value = os.environ.get(CONFIG_ENV_VAR)
     if env_value:
-        return Path(env_value).expanduser()
-    return default_config_path()
+        return Path(env_value).expanduser(), CONFIG_ENV_VAR
+    return default_config_path(), "default (platformdirs)"
+
+
+def resolve_config_path(explicit: Path | None = None) -> Path:
+    return describe_config_path(explicit)[0]
 
 
 def _set_nested(data: dict[str, Any], path: tuple[str, ...], value: Any) -> None:

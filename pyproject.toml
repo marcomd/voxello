@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "voxello"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A local voice and notification layer for AI agents (MCP server bridging VoiceStudio TTS to local playback)."
 readme = "README.md"
 license = "Apache-2.0"
@@ -34,7 +34,10 @@ dependencies = [
 voxello = "voxello.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/team-blue/voxello"
+Homepage = "https://github.com/marcomd/voxello"
+Repository = "https://github.com/marcomd/voxello"
+Issues = "https://github.com/marcomd/voxello/issues"
+Changelog = "https://github.com/marcomd/voxello/releases"
 
 [dependency-groups]
 dev = [
@@ -44,8 +47,22 @@ dev = [
   "pyright>=1.1",
 ]
 
+[tool.hatch.version]
+path = "src/voxello/__init__.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/voxello"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src",
+  "tests",
+  "docs",
+  "README.md",
+  "LICENSE",
+  "CLAUDE.md",
+  "config.example.yaml",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

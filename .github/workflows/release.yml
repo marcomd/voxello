@@ -1,0 +1,71 @@
+# Release: push a tag `vX.Y.Z` that matches `__version__` in src/voxello/__init__.py.
+# The workflow builds the sdist and wheel, attaches them to a GitHub release and publishes
+# to PyPI through trusted publishing (no API token stored in the repo). One-time setup on
+# pypi.org: project `voxello` -> Publishing -> add a GitHub publisher with owner `marcomd`,
+# repository `voxello`, workflow `release.yml`, environment `pypi`.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Check that the tag matches the package version
+        run: |
+          set -euo pipefail
+          version="$(sed -nE 's/^__version__ = "([^"]+)"$/\1/p' src/voxello/__init__.py)"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ -z "$version" ] || [ "$version" != "$tag" ]; then
+            echo "::error::tag v$tag does not match __version__ = '$version' in src/voxello/__init__.py"
+            exit 1
+          fi
+      - name: Build sdist and wheel
+        run: |
+          set -euo pipefail
+          uv build
+          ls dist/voxello-"${GITHUB_REF_NAME#v}"-py3-none-any.whl dist/voxello-"${GITHUB_REF_NAME#v}".tar.gz
+      - name: Check metadata
+        run: uvx twine check dist/*
+      - name: Smoke test the wheel
+        run: |
+          set -euo pipefail
+          uv run --isolated --no-project --with dist/*.whl voxello --version
+          uv run --isolated --no-project --with dist/*.whl voxello install claude --help >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  github-release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

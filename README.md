@@ -23,25 +23,38 @@ Agent ──MCP──▶ Voxello ──HTTP──▶ VoiceStudio / omnivoice-ser
 
 ## Install
 
-From this repository:
+Install Voxello once as a [uv tool](https://docs.astral.sh/uv/guides/tools/); the `voxello` command
+then works from any directory and any project:
 
 ```bash
-git clone <repo-url> voxello && cd voxello
-uv sync
+uv tool install voxello
+voxello doctor
+```
+
+Alternatives:
+
+```bash
+uvx voxello speak "Hello"                                    # run without installing
+uv tool install git+https://github.com/marcomd/voxello       # latest main instead of the PyPI release
+uv tool upgrade voxello                                      # later
+```
+
+To work on Voxello itself, clone it and use `uv run` inside the checkout (or
+`uv run --directory /path/to/voxello voxello ...` from elsewhere):
+
+```bash
+git clone https://github.com/marcomd/voxello && cd voxello
+uv sync --all-groups
 uv run voxello doctor
 ```
 
-As a tool available on your PATH:
-
-```bash
-uv tool install --from /path/to/voxello voxello   # or: uvx --from /path/to/voxello voxello
-```
+The rest of this README uses the installed `voxello` command; in a checkout prefix `uv run`.
 
 ## Configure
 
 ```bash
-uv run voxello config init        # writes ~/Library/Application Support/voxello/config.yaml (macOS)
-uv run voxello config path        # shows where the file lives on this OS
+voxello config init        # writes ~/Library/Application Support/voxello/config.yaml (macOS)
+voxello config path        # shows where the file lives on this OS
 ```
 
 Minimal intranet setup with `omnivoice-server`:
@@ -72,14 +85,16 @@ its name (`default` vs `auto`) and each rejects the other's.
 Environment variables override the file: `VOXELLO_VOICESTUDIO_URL`, `VOXELLO_VOICESTUDIO_API_KEY`,
 `VOXELLO_DEFAULT_VOICE`, `VOXELLO_LOG_LEVEL`, or any nested key as `VOXELLO_TTS__VOICESTUDIO__ENGINE`.
 `VOXELLO_CONFIG` points to an alternative config file. See `config.example.yaml` for every option.
+`voxello doctor` prints which config file it read and where it came from (`--config`,
+`VOXELLO_CONFIG` or the OS default), plus which executable and Python interpreter are running.
 
 ## Try it without an agent
 
 ```bash
-uv run voxello doctor                                  # provider reachable? player? notifier?
-uv run voxello speak "Build completata. Tutti i test passano."
-uv run voxello speak "Salvami" --save                  # also writes ~/Voxello/<timestamp>_<id>.wav
-uv run voxello notify "Refactoring completato." --channels voice,desktop
+voxello doctor                                  # provider reachable? player? notifier?
+voxello speak "Build completata. Tutti i test passano."
+voxello speak "Salvami" --save                  # also writes ~/Voxello/<timestamp>_<id>.wav
+voxello notify "Refactoring completato." --channels voice,desktop
 ```
 
 ## Register with your agent
@@ -87,7 +102,7 @@ uv run voxello notify "Refactoring completato." --channels voice,desktop
 **Claude Code** (user scope, available in every project):
 
 ```bash
-claude mcp add --scope user --transport stdio voxello -- uv run --directory /path/to/voxello voxello serve
+claude mcp add --scope user --transport stdio voxello -- voxello serve
 ```
 
 Check the connection with `claude mcp get voxello`; it should report `Connected`. A user-scoped
@@ -98,43 +113,54 @@ defined in two scopes with different commands.
 
 ```toml
 [mcp_servers.voxello]
-command = "uv"
-args = ["run", "--directory", "/path/to/voxello", "voxello", "serve"]
+command = "voxello"
+args = ["serve"]
 ```
 
 **Cursor** (`~/.cursor/mcp.json`):
 
 ```json
-{ "mcpServers": { "voxello": { "command": "uv", "args": ["run", "--directory", "/path/to/voxello", "voxello", "serve"] } } }
+{ "mcpServers": { "voxello": { "command": "voxello", "args": ["serve"] } } }
 ```
+
+If the agent's environment does not see `~/.local/bin`, use the absolute path printed by
+`voxello doctor` (`Executable:`). From a checkout without a tool install, use
+`uv run --directory /path/to/voxello voxello serve` as the command instead.
 
 Then ask the agent, for example: *"Refactor the auth module, run the tests, and tell me by
 voice when you are done."*
 
 ## Claude Code skill and hook
 
-Two small Claude Code additions ship in `.claude/` and turn Voxello into the "tell me when you
-are done" workflow.
-
-**`voice-notify` skill** (`.claude/skills/voice-notify/SKILL.md`). When you ask Claude Code to
-notify you by voice ("avvisami a voce quando hai finito", "notify me by voice", "leggimelo"), the
-skill activates and Claude ends the task with one `notify` call carrying a one or two sentence
-spoken summary in your language, on the voice and desktop channels, with high priority when the
-task failed or is blocked. Install it for every project by copying the file:
+Two small Claude Code additions ship inside the package and turn Voxello into the "tell me when
+you are done" workflow. Install both with one command:
 
 ```bash
-mkdir -p ~/.claude/skills/voice-notify
-cp .claude/skills/voice-notify/SKILL.md ~/.claude/skills/voice-notify/
+voxello install claude          # add --yes to register the hook without being asked
 ```
 
-It can also be invoked explicitly with `/voice-notify`. The skill relies on the model to make the
-final call; the hook below is the deterministic half.
+It copies the `voice-notify` skill to `~/.claude/skills/voice-notify/SKILL.md` and the
+Notification hook to `~/.claude/hooks/voxello-notification-hook.sh`, prints the JSON entry the
+hook needs in `~/.claude/settings.json`, and writes it only after you confirm (or with `--yes`).
+Existing settings are preserved; running it again is harmless. Options: `--claude-dir` (defaults
+to `$CLAUDE_CONFIG_DIR` or `~/.claude`), `--lang en` for English hook sentences, `--no-hook`,
+`--no-skill`. The same files live in this repository under `.claude/` for people working in the
+checkout.
 
-**Notification hook** (`.claude/hooks/voxello-notification-hook.sh`). Claude Code fires a
-`Notification` event when it waits on a permission prompt or goes idle. The hook turns the event
-into a short spoken sentence ("Claude Code chiede un permesso per continuare.") and delivers it
-through `voxello notify`, so you hear it when you have walked away from the terminal. Add it to
-`~/.claude/settings.json`:
+**`voice-notify` skill.** When you ask Claude Code to notify you by voice ("avvisami a voce quando
+hai finito", "notify me by voice", "leggimelo"), the skill activates and Claude ends the task with
+one `notify` call carrying a one or two sentence spoken summary in your language, on the voice and
+desktop channels, with high priority when the task failed or is blocked. It can also be invoked
+explicitly with `/voice-notify`. The skill relies on the model to make the final call; the hook
+below is the deterministic half.
+
+**Notification hook.** Claude Code fires a `Notification` event when it waits on a permission
+prompt or goes idle. The hook turns the event into a short spoken sentence ("Claude Code chiede un
+permesso per continuare.") and delivers it through `voxello notify`, so you hear it when you have
+walked away from the terminal. It looks for `voxello` on the PATH, then in `~/.local/bin`, then
+falls back to `uv run --directory "$VOXELLO_REPO"` if that variable points to a checkout; when none
+is available it logs to stderr and exits without speaking. This is the entry `voxello install
+claude` proposes for `~/.claude/settings.json`:
 
 ```json
 {
@@ -145,7 +171,7 @@ through `voxello notify`, so you hear it when you have walked away from the term
         "hooks": [
           {
             "type": "command",
-            "command": "/path/to/voxello/.claude/hooks/voxello-notification-hook.sh",
+            "command": "/Users/you/.claude/hooks/voxello-notification-hook.sh",
             "async": true,
             "timeout": 30
           }
@@ -158,6 +184,20 @@ through `voxello notify`, so you hear it when you have walked away from the term
 
 The script speaks Italian by default; set `VOXELLO_HOOK_LANG=en` for English and
 `VOXELLO_HOOK_CHANNELS=desktop` to keep it silent. Review or disable it later with `/hooks`.
+
+## Use inside a project with `uv run`
+
+`uv run voxello` resolves `voxello` against the *current* project, so inside another repository it
+fails unless that project depends on Voxello. If you want exactly that form (for example in a
+`Makefile` shared by a team), add Voxello as a development dependency:
+
+```bash
+uv add --dev voxello
+uv run voxello speak "Build completed. All tests pass."
+```
+
+For everything else the tool install above is simpler: one `voxello` on the PATH, shared by every
+project and by the agents' MCP configuration. `voxello doctor` reports which mode is in use.
 
 ## Tools
 
@@ -207,7 +247,24 @@ uv run pyright src
 ```
 
 Design notes: `docs/voxello-specification.md` (the specification), `docs/voicestudio-api.md`
-(VoiceStudio HTTP contract) and `docs/omnivoice-server-api.md` (omnivoice-server setup and contract).
+(VoiceStudio HTTP contract), `docs/omnivoice-server-api.md` (omnivoice-server setup and contract)
+and `docs/roadmap.md` (what comes next).
+
+### Releasing
+
+The version lives only in `src/voxello/__init__.py` (`pyproject.toml` reads it through hatch).
+Bump it, commit, then tag and push:
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+`.github/workflows/release.yml` checks that the tag matches `__version__`, builds the sdist and
+wheel, smoke-tests the wheel, creates a GitHub release with the files and publishes to PyPI through
+[trusted publishing](https://docs.pypi.org/trusted-publishers/). One-time setup on pypi.org: add a
+GitHub publisher for project `voxello` with owner `marcomd`, repository `voxello`, workflow
+`release.yml`, environment `pypi`, and create the `pypi` environment in the GitHub repository
+settings. `ci.yml` runs ruff, pyright and pytest on macOS and Linux for every push and pull request.
 
 ## Licensing
 

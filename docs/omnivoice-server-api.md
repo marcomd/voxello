@@ -67,8 +67,8 @@ Environment overrides: `VOXELLO_VOICESTUDIO_URL`, `VOXELLO_VOICESTUDIO_API_KEY`,
 Check it:
 
 ```bash
-uv run voxello doctor          # health, model id, engines, voice ids, player, notifier
-uv run voxello speak "Ciao, sono Voxello." --voice nova
+voxello doctor          # health, model id, engines, voice ids, player, notifier
+voxello speak "Ciao, sono Voxello." --voice nova
 ```
 
 ### Voices

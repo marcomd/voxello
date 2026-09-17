@@ -26,6 +26,8 @@ uv run voxello speak "text" [--save]
 uv run voxello notify "text" --channels voice,desktop
 uv run voxello serve                              # MCP server over stdio (what agents run)
 uv run voxello config init|path|show
+uv run voxello install claude [--yes] [--claude-dir DIR]   # copy skill + hook into ~/.claude, offer settings.json entry
+uv build                                          # sdist + wheel; version comes from src/voxello/__init__.py
 ```
 
 Toolchain: Python 3.12+ managed by uv (`.python-version`). Ruff line length 100; lint set includes
@@ -79,13 +81,26 @@ or a real TTS server belongs under `tests/integration/` with the `integration` m
 - Leave `voice` unset for the server default: VoiceStudio and omnivoice-server name it differently
   (`default` vs `auto`) and each rejects the other's.
 
-## Claude Code integration shipped in the repo
+## Claude Code integration shipped in the package
 
-`.claude/skills/voice-notify/SKILL.md` makes Claude end a task with one `notify` call when the user
-asks to be told by voice. `.claude/hooks/voxello-notification-hook.sh` turns Claude Code
-`Notification` events into a spoken sentence via `voxello notify` (Italian by default,
-`VOXELLO_HOOK_LANG=en`, `VOXELLO_HOOK_CHANNELS=desktop` to silence). Both are registered at user
-scope, not in a project `.mcp.json` (Claude Code warns on duplicate scopes).
+The canonical skill and hook live in `src/voxello/assets/claude/` and ship in the wheel;
+`voxello install claude` (`install.py`) copies them into `~/.claude` (or `$CLAUDE_CONFIG_DIR`) and
+only writes the hook entry into `settings.json` with `--yes` or an interactive confirmation.
+`.claude/skills/voice-notify/SKILL.md` and `.claude/hooks/voxello-notification-hook.sh` are
+byte-identical mirrors for working inside this checkout; `tests/test_install.py` fails if they
+drift, so edit the package copy and re-copy. The skill makes Claude end a task with one `notify`
+call when the user asks to be told by voice. The hook turns Claude Code `Notification` events into
+a spoken sentence via `voxello notify` (Italian by default, `VOXELLO_HOOK_LANG=en`,
+`VOXELLO_HOOK_CHANNELS=desktop` to silence); it prefers `voxello` on the PATH, then
+`~/.local/bin/voxello`, then `uv run --directory "$VOXELLO_REPO"`, then the checkout it lives in.
+Both are registered at user scope, not in a project `.mcp.json` (Claude Code warns on duplicate
+scopes).
+
+## Releasing
+
+Bump `__version__` in `src/voxello/__init__.py` (pyproject reads it via hatch), commit, tag
+`vX.Y.Z` and push the tag. `.github/workflows/release.yml` checks the tag matches, builds, creates
+the GitHub release and publishes to PyPI with trusted publishing (environment `pypi`).
 
 ## Licensing note
 
