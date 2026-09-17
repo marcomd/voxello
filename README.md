@@ -2,6 +2,8 @@
 
 **A local voice and notification layer for AI agents.**
 
+![cover.jpeg](docs/cover.jpeg)
+
 Voxello is a small MCP server that lets Claude Code, Codex, Cursor and other MCP clients
 `speak`, `notify`, `stop_speaking` and `get_status`. It sends text to a local TTS server
 (VoiceStudio, or the headless `omnivoice-server`, both running OmniVoice), plays the audio on
@@ -222,12 +224,12 @@ project and by the agents' MCP configuration. `voxello doctor` reports which mod
 
 ## Tools
 
-| Tool | Purpose | Key parameters |
-|---|---|---|
-| `speak` | synthesize and play text | `text`, `voice`, `interrupt` (default true), `save`, `play`, `mode`, `cache`, `client_id` |
-| `stop_speaking` | stop playback and clear the queue | optional `request_id` |
-| `get_status` | state, current request, queue, cache hits, provider and player health | none |
-| `notify` | route a short message to `voice`, `desktop` and/or `file` | `message`, `channels`, `priority`, `title`, `cache` |
+| Tool            | Purpose                                                               | Key parameters                                                                            |
+| --------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `speak`         | synthesize and play text                                              | `text`, `voice`, `interrupt` (default true), `save`, `play`, `mode`, `cache`, `client_id` |
+| `stop_speaking` | stop playback and clear the queue                                     | optional `request_id`                                                                     |
+| `get_status`    | state, current request, queue, cache hits, provider and player health | none                                                                                      |
+| `notify`        | route a short message to `voice`, `desktop` and/or `file`             | `message`, `channels`, `priority`, `title`, `cache`                                       |
 
 `speak` returns metadata (`request_id`, `status`, `duration_ms`, `saved_path`, `cached`), never
 audio. `cache` is tri-state: unset follows the policy (notifications yes, verbatim speech no),
