@@ -1,0 +1,93 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+Voxello is an MCP server (stdio) that gives AI agents a voice on the user's machine: `speak`, `notify`,
+`stop_speaking`, `get_status`. It sends text to an OpenAI-compatible TTS endpoint (VoiceStudio on port
+3900 or headless `omnivoice-server` on port 8880, both running OmniVoice), plays the WAV with a local
+player subprocess (`afplay`/`mpv`/`paplay`/`aplay`/`ffplay`/PowerShell), and shows desktop notifications.
+The full design lives in `docs/voxello-specification.md`; code comments cite its section numbers
+(for example "spec section 15" for queue semantics, "section 23" for error codes).
+
+## Commands
+
+```bash
+uv sync --all-groups                              # install with dev group
+uv run pytest                                     # unit tests (integration excluded by default via addopts)
+uv run pytest tests/test_speak.py                 # one file
+uv run pytest tests/test_queue.py -k interrupt    # one test by keyword
+uv run pytest -m integration tests/integration    # real afplay; real TTS if VOXELLO_VOICESTUDIO_URL is set
+uv run ruff check src tests && uv run ruff format --check src tests
+uv run pyright src                                # pyright only covers src/, not tests/
+uv run voxello doctor                             # check config, TTS server, player, notifier
+uv run voxello speak "text" [--save]
+uv run voxello notify "text" --channels voice,desktop
+uv run voxello serve                              # MCP server over stdio (what agents run)
+uv run voxello config init|path|show
+```
+
+Toolchain: Python 3.12+ managed by uv (`.python-version`). Ruff line length 100; lint set includes
+`S` (bandit), `ASYNC`, `B`, `RUF`. `pytest-asyncio` runs in `asyncio_mode = "auto"`, so async tests
+need no decorator.
+
+## Architecture
+
+Layers, top to bottom, each depending only on the ones below:
+
+- `mcp/server.py` builds the `MCPServer` with a lifespan that creates and starts a `VoxelloService`;
+  `mcp/tools.py` registers the four tools. Tools are thin: they call the service and convert
+  `VoxelloError` into `ToolError`. The server `INSTRUCTIONS` string is what agents see; keep it in
+  sync with tool descriptions if behaviour changes.
+- `core/service.py` (`VoxelloService`) is the orchestrator and holds all business rules: text
+  validation and length limits, request ID and `RequestRecord` state machine (`core/models.py`),
+  serialising synthesis behind `_synth_lock`, temp/output storage, and mapping `notify` priorities
+  to interrupt behaviour (`high`/`critical` interrupt, `low` never, `normal` uses config default).
+  `notify` is implemented on top of `speak` with `mode="notification"`; the `file` channel saves
+  both audio and text via `OutputStore`. Its result is `delivered`/`partial`/`failed` per channel.
+- `playback/manager.py` (`PlaybackManager`) is a single worker loop over an `asyncio` queue with
+  interrupt, per-request cancel and stop-all semantics; it reports outcomes back to the service via a
+  callback so records reach terminal states and temp files get discarded. `playback/detect.py`
+  picks a `PlayerBackend` for the OS; `subprocess_player.py` wraps the subprocess into a
+  `PlaybackHandle`.
+- `tts/voicestudio.py` is the only provider. It speaks `POST /v1/audio/speech` and probes
+  alternative paths for voices/engines because VoiceStudio and omnivoice-server differ
+  (`VOICES_PATHS`, `ENGINES_PATHS`). HTTP failures are translated into stable error codes.
+- `notifications/desktop.py` picks `terminal-notifier`, `osascript`, `notify-send` or PowerShell.
+- `config.py` uses `pydantic-settings` with a YAML file (path from `platformdirs`, override with
+  `VOXELLO_CONFIG`) and `VOXELLO_*` env vars, nested keys with `__`.
+- `errors.py`: every layer raises `VoxelloError(code, message)`; codes are the stable contract shown
+  to agents and printed by the CLI. Add new codes there rather than raising ad hoc exceptions.
+
+Protocols (`TTSProvider`, `AudioPlayer`, `PlaybackHandle`, `Notifier`) live in each package's
+`base.py`; `VoxelloService.__init__` accepts injected implementations, which is how tests work.
+
+## Testing conventions
+
+`tests/conftest.py` provides `FakeProvider` (generates silent WAVs, can be told to fail or delay),
+`FakePlayer` (playback never ends until the test calls `finish_current()`), `FakeNotifier`, an
+isolated `settings` fixture using `tmp_path`, and a started `service` fixture. Use `settle()` to let
+the playback worker run a few loop iterations before asserting on state. Anything touching real audio
+or a real TTS server belongs under `tests/integration/` with the `integration` marker.
+
+## Invariants to preserve
+
+- stdout is the MCP protocol; all logging goes to stderr or `logging.file`. Never print in library code.
+- Logs record text length, not text, unless `logging.log_text` is true.
+- Voxello speaks exactly the text it receives; it never rewrites or summarises.
+- Leave `voice` unset for the server default: VoiceStudio and omnivoice-server name it differently
+  (`default` vs `auto`) and each rejects the other's.
+
+## Claude Code integration shipped in the repo
+
+`.claude/skills/voice-notify/SKILL.md` makes Claude end a task with one `notify` call when the user
+asks to be told by voice. `.claude/hooks/voxello-notification-hook.sh` turns Claude Code
+`Notification` events into a spoken sentence via `voxello notify` (Italian by default,
+`VOXELLO_HOOK_LANG=en`, `VOXELLO_HOOK_CHANNELS=desktop` to silence). Both are registered at user
+scope, not in a project `.mcp.json` (Claude Code warns on duplicate scopes).
+
+## Licensing note
+
+Voxello is Apache-2.0. VoiceStudio (AGPL-3.0) and omnivoice-server (MIT) are only called over HTTP.
+OmniVoice model weights are CC-BY-NC; keep that in mind when documenting commercial use.
