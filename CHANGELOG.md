@@ -7,6 +7,12 @@ change the MCP tool signatures or the configuration layout.
 
 ## [Unreleased]
 
+### Added
+
+- `docs/TUTORIAL.md`: step-by-step guide to installing and running `omnivoice-server` on Windows
+  with an NVIDIA GPU and on Apple Silicon, testing it with curl, and pointing Voxello at it.
+  Linked from the README.
+
 ## [0.2.0] - 2026-09-17
 
 Audio cache for static phrases (roadmap milestone 2).

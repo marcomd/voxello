@@ -18,7 +18,8 @@ Agent ──MCP──▶ Voxello ──HTTP──▶ VoiceStudio / omnivoice-ser
 - Python 3.12+ and [uv](https://docs.astral.sh/uv/)
 - A TTS server on this machine or on an intranet host: [VoiceStudio](https://github.com/debpalash/VoiceStudio)
   (port 3900, API runs while the app is open) or [omnivoice-server](https://github.com/maemreyo/omnivoice-server)
-  (port 8880, headless)
+  (port 8880, headless). New to this? [docs/TUTORIAL.md](docs/TUTORIAL.md) walks through installing
+  `omnivoice-server` on Windows with an NVIDIA GPU and on Apple Silicon, starting it and testing it with curl.
 - An audio player: `afplay` (macOS, built in), `mpv`/`paplay`/`aplay`/`ffplay` (Linux), PowerShell (Windows)
 
 ## Install
@@ -276,9 +277,10 @@ uv run ruff check src tests && uv run ruff format --check src tests
 uv run pyright src
 ```
 
-Design notes: `docs/voxello-specification.md` (the specification), `docs/voicestudio-api.md`
-(VoiceStudio HTTP contract), `docs/omnivoice-server-api.md` (omnivoice-server setup and contract)
-and `docs/roadmap.md` (what comes next).
+Docs: `docs/TUTORIAL.md` (setting up an omnivoice-server host on Windows/NVIDIA or Apple Silicon),
+`docs/voxello-specification.md` (the specification), `docs/voicestudio-api.md` (VoiceStudio HTTP
+contract), `docs/omnivoice-server-api.md` (omnivoice-server flags and contract) and `docs/roadmap.md`
+(what comes next).
 
 ### Releasing
 
