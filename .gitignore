@@ -9,6 +9,11 @@ build/
 .ruff_cache/
 .mypy_cache/
 .pyright/
+.coverage
+.coverage.*
+coverage.xml
+coverage.json
+htmlcov/
 
 # OS
 .DS_Store
@@ -19,3 +24,6 @@ build/
 # Local config / secrets
 config.yaml
 .env
+
+# Private engineering notes
+/docs/engineering-review.md

@@ -11,6 +11,9 @@ Per-request language selection (roadmap milestone 3).
 
 ### Added
 
+- Shared contributor/agent engineering instructions, branch
+  coverage reports and a 90% combined coverage gate in CI across Python 3.12–3.14.
+- Repository PR template, Voxello-specific PR creation guidance and an issue/PR label catalog.
 - `language` parameter (ISO 639-1, e.g. `it`, `en`) on the `speak` and `notify` MCP tools, on
   `VoxelloService.speak`/`notify` and on the CLI (`speak`, `notify`, `cache warm`, all with
   `--language/-l`). The value is validated (`^[a-z]{2}$`, case-insensitive, new error code
@@ -32,6 +35,10 @@ Per-request language selection (roadmap milestone 3).
 - `docs/TUTORIAL.md`: step-by-step guide to installing and running `omnivoice-server` on Windows
   with an NVIDIA GPU and on Apple Silicon, testing it with curl, and pointing Voxello at it.
   Linked from the README.
+
+### Fixed
+
+- Desktop notification subprocesses are killed and reaped when delivery times out or is cancelled.
 
 ### Changed
 

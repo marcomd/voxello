@@ -248,3 +248,70 @@ async def test_health_and_voices_parsing():
     assert [v.id for v in voices] == ["p1", "default", "p2"]
     assert voices[0].name == "Marco"
     assert await provider.list_engines() == ["omnivoice", "kittentts"]
+
+
+@pytest.mark.parametrize(
+    ("status", "payload", "detail"),
+    [
+        (500, {"detail": "engine crashed"}, "engine crashed"),
+        (429, {"message": "busy"}, "busy"),
+        (400, {"detail": ["invalid speed"]}, "invalid speed"),
+        (502, ["upstream failed"], "upstream failed"),
+    ],
+)
+async def test_provider_errors_preserve_status_and_detail(status, payload, detail):
+    provider, _ = make_provider(lambda _: httpx2.Response(status, json=payload))
+    try:
+        with pytest.raises(VoxelloError) as exc:
+            await provider.synthesize("hello")
+        assert exc.value.code == TTS_PROVIDER_ERROR
+        assert exc.value.details["http_status"] == status
+        assert detail in exc.value.message
+    finally:
+        await provider.aclose()
+
+
+@pytest.mark.parametrize("body", [b"", b"<html>unexpected</html>"])
+async def test_success_response_without_audio_is_rejected(body):
+    provider, _ = make_provider(lambda _: httpx2.Response(200, content=body))
+    try:
+        with pytest.raises(VoxelloError) as exc:
+            await provider.synthesize("hello")
+        assert exc.value.code == TTS_PROVIDER_ERROR
+    finally:
+        await provider.aclose()
+
+
+@pytest.mark.parametrize("status", [401, 503])
+async def test_unhealthy_http_status_is_reported(status):
+    provider, _ = make_provider(lambda _: httpx2.Response(status))
+    try:
+        assert (await provider.health()).status == "error"
+    finally:
+        await provider.aclose()
+
+
+@pytest.mark.parametrize("status", [401, 404, 200])
+async def test_discovery_failure_and_fallback_policy(status):
+    provider, seen = make_provider(lambda _: httpx2.Response(status, text="not JSON"))
+    try:
+        with pytest.raises(VoxelloError) as exc:
+            await provider.list_voices()
+        expected = TTS_PROVIDER_UNAUTHORIZED if status == 401 else TTS_PROVIDER_ERROR
+        assert exc.value.code == expected
+        assert len(seen) == (2 if status == 404 else 1)
+    finally:
+        await provider.aclose()
+
+
+async def test_discovery_network_failure_is_unavailable():
+    def handler(request):
+        raise httpx2.ConnectError("refused", request=request)
+
+    provider, _ = make_provider(handler)
+    try:
+        with pytest.raises(VoxelloError) as exc:
+            await provider.list_voices()
+        assert exc.value.code == TTS_PROVIDER_UNAVAILABLE
+    finally:
+        await provider.aclose()

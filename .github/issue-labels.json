@@ -1,0 +1,122 @@
+[
+  {
+    "name": "type:bug",
+    "color": "d73a4a",
+    "description": "Incorrect behavior or regression in an existing capability."
+  },
+  {
+    "name": "type:feature",
+    "color": "a2eeef",
+    "description": "A new user-facing capability or integration."
+  },
+  {
+    "name": "type:improvement",
+    "color": "84b6eb",
+    "description": "Improve existing behavior, performance or architecture."
+  },
+  {
+    "name": "type:maintenance",
+    "color": "c5def5",
+    "description": "Engineering workflow, tooling, dependencies or test infrastructure."
+  },
+  {
+    "name": "type:documentation",
+    "color": "0075ca",
+    "description": "Documentation or examples are the primary deliverable."
+  },
+  {
+    "name": "priority:high",
+    "color": "b60205",
+    "description": "A blocker or severe impact requiring prompt attention."
+  },
+  {
+    "name": "priority:medium",
+    "color": "fbca04",
+    "description": "Normal planned work; the default when no urgency is established."
+  },
+  {
+    "name": "priority:low",
+    "color": "0e8a16",
+    "description": "Optional or safely deferrable work."
+  },
+  {
+    "name": "area:core",
+    "color": "5319e7",
+    "description": "Request orchestration, lifecycle, validation and delivery policy."
+  },
+  {
+    "name": "area:tts",
+    "color": "5319e7",
+    "description": "TTS providers, synthesis requests and HTTP contracts."
+  },
+  {
+    "name": "area:playback",
+    "color": "5319e7",
+    "description": "Audio backends, playback queue, interruption and player processes."
+  },
+  {
+    "name": "area:notifications",
+    "color": "5319e7",
+    "description": "Desktop notifications and notification channel delivery."
+  },
+  {
+    "name": "area:storage",
+    "color": "5319e7",
+    "description": "Audio cache, temporary files, saved output and cleanup."
+  },
+  {
+    "name": "area:mcp",
+    "color": "5319e7",
+    "description": "MCP server, tools, schemas and protocol behavior."
+  },
+  {
+    "name": "area:cli",
+    "color": "5319e7",
+    "description": "Command-line interface, diagnostics and command output."
+  },
+  {
+    "name": "area:configuration",
+    "color": "5319e7",
+    "description": "Settings, YAML, environment overrides and configuration validation."
+  },
+  {
+    "name": "area:integrations",
+    "color": "5319e7",
+    "description": "Agent hooks, skills and integration installation."
+  },
+  {
+    "name": "area:testing",
+    "color": "5319e7",
+    "description": "Test infrastructure, fixtures, coverage and test strategy."
+  },
+  {
+    "name": "area:ci",
+    "color": "5319e7",
+    "description": "GitHub Actions, builds, packaging and release automation."
+  },
+  {
+    "name": "area:documentation",
+    "color": "5319e7",
+    "description": "User documentation, contributor guidance and examples."
+  },
+  {
+    "name": "status:needs-info",
+    "color": "d876e3",
+    "description": "Waiting for specific information needed to investigate or proceed."
+  },
+  {
+    "name": "status:blocked",
+    "color": "e99695",
+    "description": "Cannot proceed until a named dependency or blocker is resolved."
+  },
+  {
+    "name": "good first issue",
+    "color": "7057ff",
+    "description": "Well-scoped work suitable for a first contribution."
+  },
+  {
+    "name": "help wanted",
+    "color": "008672",
+    "description": "Contributions or specialist input are welcome."
+  }
+]

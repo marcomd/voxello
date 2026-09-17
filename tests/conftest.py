@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
 import wave
 from pathlib import Path
 
@@ -15,6 +16,20 @@ from voxello.errors import TTS_PROVIDER_UNAVAILABLE, VoxelloError
 from voxello.storage.cache import AudioCache
 from voxello.storage.files import OutputStore, TempStore
 from voxello.tts.base import ProviderHealth, SynthesisResult, VoiceInfo
+
+
+@pytest.fixture(autouse=True)
+def isolated_runtime(request, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Unit tests must not read user settings or clean a running Voxello's files."""
+    if request.node.get_closest_marker("integration") is not None:
+        return
+    for name in os.environ:
+        if name.startswith("VOXELLO_"):
+            monkeypatch.delenv(name)
+    monkeypatch.setattr("voxello.config.user_config_dir", lambda _: str(tmp_path / "config"))
+    monkeypatch.setattr("voxello.config.user_cache_dir", lambda _: str(tmp_path / "cache"))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    monkeypatch.setenv("VOXELLO_OUTPUT__DIRECTORY", str(tmp_path / "out"))
 
 
 def make_wav(duration_ms: int = 500, sample_rate: int = 24000) -> bytes:

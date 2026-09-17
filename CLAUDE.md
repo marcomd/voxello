@@ -2,6 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+Follow [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md) for shared engineering
+policy, TDD and required checks. Keep that policy there rather than duplicating it here.
+
 ## What this is
 
 Voxello is an MCP server (stdio) that gives AI agents a voice on the user's machine: `speak`, `notify`,
@@ -16,6 +19,7 @@ The full design lives in `docs/voxello-specification.md`; code comments cite its
 ```bash
 uv sync --all-groups                              # install with dev group
 uv run pytest                                     # unit tests (integration excluded by default via addopts)
+uv run pytest --cov --cov-report=term-missing --cov-report=html  # branches; combined floor 90%
 uv run pytest tests/test_speak.py                 # one file
 uv run pytest tests/test_queue.py -k interrupt    # one test by keyword
 uv run pytest -m integration tests/integration    # real afplay; real TTS if VOXELLO_VOICESTUDIO_URL is set
