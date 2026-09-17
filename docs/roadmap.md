@@ -51,11 +51,23 @@ Still open: the first tagged release and the one-time PyPI trusted-publisher set
   exactly the `uv run voxello speak ...` form inside their own `pyproject.toml`.
 - No code: README only, plus one line in `doctor` explaining the difference between the two modes.
 
-## Milestone 2 — Audio cache for static phrases
+## Milestone 2 — Audio cache for static phrases (done 2026-09-17)
 
 Goal: fixed phrases (Claude Code hook, repeated notifications) are synthesized only once.
-Today every call regenerates the WAV, stores it in `TempStore` and deletes it after
-`temp_retention_minutes`.
+Before this milestone every call regenerated the WAV, stored it in `TempStore` and deleted it
+after `temp_retention_minutes`.
+
+Delivered: `storage/cache.py` (`AudioCache`, SHA-256 key over `CacheKeyParts`, `<hash>.wav` plus
+a `<hash>.json` sidecar with voice label, provider and text length, LRU on file mtime touched on
+hit, eviction by count and age after every store), `cache:` settings with a validator that keeps
+the cache directory distinct from the temp dir, `cache: bool | None` on `speak`/`notify` (service,
+MCP tools, CLI `--cache/--no-cache`) with the policy below, `cached` in `SpeechResult` and
+`cache_hits` in `get_status`, `doctor` cache line, `voxello cache list|clear|warm` (`warm` reads a
+file, stdin or `--hook-phrases --language it|en`), the hook passes `--cache`, and the hook
+sentences live in `assets/claude/messages/{it,en}.yaml` (the bash script keeps a copy until 3.3;
+a test keeps them equal). Deviations from the text below: the LRU signal is the WAV mtime rather
+than atime; the language in the key is still the global `tts.voicestudio.language` until 3.1,
+whose per-request value simply replaces that argument of `CacheKeyParts`.
 
 ### 2.1 `AudioCache` in `storage/`
 
@@ -145,10 +157,11 @@ speaks English.
 
 ### 3.3 Hook and skill
 
-- The hook passes `--language "$LANG_CODE"` and `--cache`. The predefined phrases move out of
-  the bash script into message files (`messages/it.yaml`, `messages/en.yaml`) inside the
-  package, so `voxello cache warm --hook-phrases --language it` can pre-generate them and
-  adding a language does not require touching the script.
+- The hook passes `--language "$LANG_CODE"` (it already passes `--cache` since milestone 2).
+  The message files `assets/claude/messages/{it,en}.yaml` and
+  `voxello cache warm --hook-phrases --language it` already exist; what remains is making the
+  bash script read them instead of its hardcoded copies, so adding a language does not require
+  touching the script, and dropping the sync test in `tests/test_hook.py`.
 - The `voice-notify` skill instructs to pass a `language` consistent with the message text.
 
 ### 3.4 Tests
@@ -192,11 +205,11 @@ In estimated order of usefulness, all at the same low priority until milestones 
 
 | Step | Item | Reason |
 |------|------|--------|
-| 1 | 3.1 | Small, unblocks correct cache and hook (language becomes part of the cache key) |
-| 2 | 2.1 + 2.2 | Reduces server load for repeated alerts |
-| 3 | 3.3 | Hook uses language and cache; phrases in message files |
-| 4 | 1.1 + 1.2 | Global tool installation, hook independent of the checkout |
-| 5 | 3.2, 2.2 `warm`, 1.3 | Polish |
+| 1 | 3.1 | Small; language becomes a per-request argument of the cache key |
+| 2 | 2.1 + 2.2 | Done: reduces server load for repeated alerts |
+| 3 | 3.3 | Hook passes language; script reads the message files |
+| 4 | 1.1 + 1.2 | Done: global tool installation, hook independent of the checkout |
+| 5 | 3.2, 1.3 | Polish (`warm` and 1.3 are done) |
 | 6 | Milestone 4 | CI and robustness before publishing |
 | 7 | Milestone 5 | On demand |
 

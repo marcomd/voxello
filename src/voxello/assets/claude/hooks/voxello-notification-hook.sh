@@ -4,8 +4,10 @@
 # Claude Code pipes a JSON object on stdin with at least:
 #   {"hook_event_name":"Notification","notification_type":"permission_prompt","message":"..."}
 # This script turns the notification type into a short spoken sentence and delivers it
-# through `voxello notify`, so you hear when Claude Code needs you while you are away
-# from the terminal. It never blocks Claude Code (configure it with "async": true).
+# through `voxello notify --cache`, so you hear when Claude Code needs you while you are
+# away from the terminal; the fixed sentences are synthesized once and replayed from the
+# audio cache afterwards (`voxello cache warm --hook-phrases` pre-fills them). It never
+# blocks Claude Code (configure it with "async": true).
 #
 # How the CLI is found, in order:
 #   1. `voxello` on the PATH (for example after `uv tool install voxello`)
@@ -88,4 +90,4 @@ fi
 text="${text:0:250}"
 
 # stdout is discarded (it is JSON for humans); stderr stays visible in Claude Code's hook output.
-exec "${VOXELLO_CMD[@]}" notify "$text" --channels "$CHANNELS" --priority high >/dev/null
+exec "${VOXELLO_CMD[@]}" notify "$text" --channels "$CHANNELS" --priority high --cache >/dev/null

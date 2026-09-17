@@ -22,8 +22,10 @@ uv run pytest -m integration tests/integration    # real afplay; real TTS if VOX
 uv run ruff check src tests && uv run ruff format --check src tests
 uv run pyright src                                # pyright only covers src/, not tests/
 uv run voxello doctor                             # check config, TTS server, player, notifier
-uv run voxello speak "text" [--save]
-uv run voxello notify "text" --channels voice,desktop
+uv run voxello speak "text" [--save] [--cache]
+uv run voxello notify "text" --channels voice,desktop [--no-cache]
+uv run voxello cache list|clear                   # audio cache: hash, size, chars, voice, last use
+uv run voxello cache warm --hook-phrases --language it|en   # or: cache warm FILE, cache warm -
 uv run voxello serve                              # MCP server over stdio (what agents run)
 uv run voxello config init|path|show
 uv run voxello install claude [--yes] [--claude-dir DIR]   # copy skill + hook into ~/.claude, offer settings.json entry
@@ -48,6 +50,18 @@ Layers, top to bottom, each depending only on the ones below:
   to interrupt behaviour (`high`/`critical` interrupt, `low` never, `normal` uses config default).
   `notify` is implemented on top of `speak` with `mode="notification"`; the `file` channel saves
   both audio and text via `OutputStore`. Its result is `delivered`/`partial`/`failed` per channel.
+  `speak`/`notify` take `cache: bool | None`: `_cache_allowed` applies the policy (notifications
+  cached by default, verbatim only on request, never outside `cache.min/max_text_chars`), the
+  lookup runs before `_synth_lock` so a hit never waits on the TTS server, and a miss stores the
+  WAV after synthesis (a store failure is logged, never raised). Hits play the cache file in
+  place and count in `StatusReport.cache_hits`.
+- `storage/cache.py` (`AudioCache`) keys entries by SHA-256 of `CacheKeyParts` (normalized text,
+  effective voice, engine, language, speed, num_step, guidance_scale, base_url); files are
+  `<hash>.wav` plus a `<hash>.json` sidecar (voice label, provider, text length, never the text).
+  LRU uses the WAV mtime, touched on hit; `evict()` runs after every store. It lives in
+  `user_cache_dir/audio`, a sibling of `TempStore`'s `tmp/`, and `Settings` rejects the two
+  directories being equal because `TempStore.owns()` is what keeps the service from deleting cache
+  files.
 - `playback/manager.py` (`PlaybackManager`) is a single worker loop over an `asyncio` queue with
   interrupt, per-request cancel and stop-all semantics; it reports outcomes back to the service via a
   callback so records reach terminal states and temp files get discarded. `playback/detect.py`
@@ -80,6 +94,9 @@ or a real TTS server belongs under `tests/integration/` with the `integration` m
 - Voxello speaks exactly the text it receives; it never rewrites or summarises.
 - Leave `voice` unset for the server default: VoiceStudio and omnivoice-server name it differently
   (`default` vs `auto`) and each rejects the other's.
+- Cache files are never deleted by playback, the temp sweeper or shutdown: every discard goes
+  through `TempStore.discard`, which ignores paths outside the temp dir. Only `AudioCache.evict`
+  and `clear` remove them. Anything that shapes the audio must be part of `CacheKeyParts`.
 
 ## Claude Code integration shipped in the package
 
@@ -90,17 +107,22 @@ only writes the hook entry into `settings.json` with `--yes` or an interactive c
 byte-identical mirrors for working inside this checkout; `tests/test_install.py` fails if they
 drift, so edit the package copy and re-copy. The skill makes Claude end a task with one `notify`
 call when the user asks to be told by voice. The hook turns Claude Code `Notification` events into
-a spoken sentence via `voxello notify` (Italian by default, `VOXELLO_HOOK_LANG=en`,
+a spoken sentence via `voxello notify --cache` (Italian by default, `VOXELLO_HOOK_LANG=en`,
 `VOXELLO_HOOK_CHANNELS=desktop` to silence); it prefers `voxello` on the PATH, then
 `~/.local/bin/voxello`, then `uv run --directory "$VOXELLO_REPO"`, then the checkout it lives in.
 Both are registered at user scope, not in a project `.mcp.json` (Claude Code warns on duplicate
-scopes).
+scopes). The hook sentences also live in `src/voxello/assets/claude/messages/{it,en}.yaml`, read
+by `install.hook_phrases()` for `voxello cache warm --hook-phrases`; `tests/test_hook.py` fails if
+the bash script's hardcoded copies drift from the YAML (roadmap 3.3 will make the script read
+them).
 
 ## Releasing
 
-Bump `__version__` in `src/voxello/__init__.py` (pyproject reads it via hatch), commit, tag
-`vX.Y.Z` and push the tag. `.github/workflows/release.yml` checks the tag matches, builds, creates
-the GitHub release and publishes to PyPI with trusted publishing (environment `pypi`).
+Bump `__version__` in `src/voxello/__init__.py` (pyproject reads it via hatch), move the
+`Unreleased` section of `CHANGELOG.md` under the new version with today's date, commit, tag
+`vX.Y.Z` and push the tag. Every user-visible change gets a line under `Unreleased`.
+`.github/workflows/release.yml` checks the tag matches, builds, creates the GitHub release and
+publishes to PyPI with trusted publishing (environment `pypi`).
 
 ## Licensing note
 

@@ -1,0 +1,9 @@
+# Spoken sentences for Claude Code Notification events (English).
+# Keys are Claude Code notification_type values; `default` covers unknown types with no message.
+# The hook script keeps its own copy of these sentences until roadmap 3.3; tests keep them in sync.
+permission_prompt: "Claude Code is asking for permission to continue."
+idle_prompt: "Claude Code has finished and is waiting for you."
+agent_needs_input: "A Claude agent needs your input."
+agent_completed: "A Claude agent has completed its work."
+elicitation_dialog: "Claude Code needs some information from you."
+default: "Claude Code needs your attention."

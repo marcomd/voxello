@@ -39,6 +39,7 @@ from voxello.playback.base import AudioPlayer
 from voxello.playback.detect import detect_backend
 from voxello.playback.manager import Outcome, PlaybackItem, PlaybackManager
 from voxello.playback.subprocess_player import SubprocessPlayer
+from voxello.storage.cache import AudioCache, CacheKeyParts
 from voxello.storage.files import OutputStore, TempStore
 from voxello.storage.wav import wav_duration_ms
 from voxello.tts.base import TTSProvider
@@ -61,6 +62,7 @@ class VoxelloService:
         notifier: Notifier | None,
         temp_store: TempStore,
         output_store: OutputStore,
+        audio_cache: AudioCache | None = None,
     ) -> None:
         self.settings = settings
         self.provider = provider
@@ -68,6 +70,7 @@ class VoxelloService:
         self.notifier = notifier
         self.temp_store = temp_store
         self.output_store = output_store
+        self.audio_cache = audio_cache
         self.playback: PlaybackManager | None = (
             PlaybackManager(
                 player,
@@ -81,6 +84,7 @@ class VoxelloService:
         self._records: OrderedDict[str, RequestRecord] = OrderedDict()
         self._synth_lock = asyncio.Semaphore(1)
         self._generating = 0
+        self._cache_hits = 0
         self._sweeper: asyncio.Task[None] | None = None
         self._health_cache: tuple[float, HealthReport] | None = None
         self._started = False
@@ -114,6 +118,7 @@ class VoxelloService:
             settings.storage.cleanup_on_start,
         )
         output_store = OutputStore(settings.output.resolved_directory())
+        audio_cache = cls.cache_from_settings(settings)
         return cls(
             settings,
             provider=provider,
@@ -121,6 +126,18 @@ class VoxelloService:
             notifier=notifier,
             temp_store=temp_store,
             output_store=output_store,
+            audio_cache=audio_cache,
+        )
+
+    @staticmethod
+    def cache_from_settings(settings: Settings) -> AudioCache | None:
+        """Build the audio cache described by ``settings.cache`` (``None`` when disabled)."""
+        if not settings.cache.enabled:
+            return None
+        return AudioCache(
+            settings.cache.resolved_directory(),
+            max_entries=settings.cache.max_entries,
+            max_age_days=settings.cache.max_age_days,
         )
 
     # -- lifecycle -----------------------------------------------------------------
@@ -129,6 +146,8 @@ class VoxelloService:
         if self._started:
             return
         self.temp_store.prepare()
+        if self.audio_cache is not None:
+            self.audio_cache.prepare()
         if self.playback is not None:
             self.playback.start()
         self._sweeper = asyncio.create_task(self.temp_store.run_sweeper(), name="voxello-sweeper")
@@ -171,6 +190,7 @@ class VoxelloService:
         play: bool = True,
         mode: SpeechMode = "verbatim",
         client_id: str | None = None,
+        cache: bool | None = None,
     ) -> SpeechResult:
         request_id = new_request_id()
         record = RequestRecord(
@@ -194,37 +214,76 @@ class VoxelloService:
                 )
 
             record.set_state(RequestState.GENERATING)
+            described = describe_text(text, self.settings.logging.log_text)
             log.info(
-                "speak %s: %s voice=%s mode=%s interrupt=%s play=%s save=%s client=%s",
+                "speak %s: %s voice=%s mode=%s interrupt=%s play=%s save=%s cache=%s client=%s",
                 request_id,
-                describe_text(text, self.settings.logging.log_text),
+                described,
                 voice or self.settings.tts.voicestudio.voice or "server-default",
                 mode,
                 interrupt,
                 play,
                 save,
+                cache,
                 client_id,
             )
-            started = time.monotonic()
-            self._generating += 1
-            try:
-                async with self._synth_lock:
-                    synthesis = await self.provider.synthesize(text, voice)
-            finally:
-                self._generating -= 1
-            generation_ms = round((time.monotonic() - started) * 1000)
 
-            audio_path = self.temp_store.write(synthesis.audio)
-            record.audio_path = audio_path
-            record.duration_ms = wav_duration_ms(synthesis.audio)
-            record.voice = synthesis.voice
-            record.set_state(RequestState.GENERATED)
-            log.info(
-                "generated %s in %d ms (duration=%s ms)",
-                request_id,
-                generation_ms,
-                record.duration_ms,
+            # Cache lookup happens before the synthesis lock so hits never wait on the TTS
+            # server (roadmap 2.2). The cache only ever holds short, repeatable phrases.
+            cache_key = (
+                self._cache_key(text, voice) if self._cache_allowed(text, mode, cache) else None
             )
+            entry = (
+                self.audio_cache.lookup(cache_key)
+                if cache_key is not None and self.audio_cache is not None
+                else None
+            )
+            if entry is not None:
+                audio_path = entry.path
+                record.cached = True
+                record.voice = entry.voice
+                record.duration_ms = wav_duration_ms(entry.path)
+                provider_name = entry.provider
+                self._cache_hits += 1
+                log.info(
+                    "cache hit %s: %s (duration=%s ms)", request_id, described, record.duration_ms
+                )
+            else:
+                if cache_key is not None:
+                    log.info("cache miss %s: %s", request_id, described)
+                started = time.monotonic()
+                self._generating += 1
+                try:
+                    async with self._synth_lock:
+                        synthesis = await self.provider.synthesize(text, voice)
+                finally:
+                    self._generating -= 1
+                generation_ms = round((time.monotonic() - started) * 1000)
+
+                audio_path = self.temp_store.write(synthesis.audio)
+                record.duration_ms = wav_duration_ms(synthesis.audio)
+                record.voice = synthesis.voice
+                provider_name = synthesis.provider
+                log.info(
+                    "generated %s in %d ms (duration=%s ms)",
+                    request_id,
+                    generation_ms,
+                    record.duration_ms,
+                )
+                if cache_key is not None and self.audio_cache is not None:
+                    try:
+                        self.audio_cache.store(
+                            cache_key,
+                            synthesis.audio,
+                            voice=synthesis.voice,
+                            provider=synthesis.provider,
+                            text_chars=len(text),
+                        )
+                    except VoxelloError as exc:
+                        # A cache write failure must never fail the speech itself.
+                        log.warning("cache store failed for %s: %s", request_id, exc)
+            record.audio_path = audio_path
+            record.set_state(RequestState.GENERATED)
 
             saved_path: Path | None = None
             if save:
@@ -250,8 +309,9 @@ class VoxelloService:
                 request_id=request_id,
                 duration_ms=record.duration_ms,
                 saved_path=str(saved_path) if saved_path else None,
-                provider=synthesis.provider,
-                voice=synthesis.voice,
+                provider=provider_name,
+                voice=record.voice or "server-default",
+                cached=record.cached,
             )
         except VoxelloError as exc:
             record.error = exc.code
@@ -301,6 +361,7 @@ class VoxelloService:
             provider=self.provider.name,
             voice=self.settings.tts.voicestudio.voice or "server-default",
             queue_length=queue_length,
+            cache_hits=self._cache_hits,
             health=await self.health(),
             recent=recent,
         )
@@ -339,6 +400,7 @@ class VoxelloService:
         priority: Priority = "normal",
         title: str | None = None,
         client_id: str | None = None,
+        cache: bool | None = None,
     ) -> NotifyResult:
         channels = channels or ["voice", "desktop"]
         for channel in channels:
@@ -369,6 +431,7 @@ class VoxelloService:
                     play=wants_voice,
                     mode="notification",
                     client_id=client_id,
+                    cache=cache,
                 )
                 request_id = speech.request_id
                 saved_path = speech.saved_path
@@ -439,6 +502,31 @@ class VoxelloService:
         if len(voice) > 128 or any(ch in voice for ch in "\x00\n\r"):
             raise VoxelloError(INVALID_PARAMETER, "Invalid voice identifier.")
         return voice
+
+    def _cache_allowed(self, text: str, mode: SpeechMode, cache: bool | None) -> bool:
+        """Cache policy (roadmap 2.2): notifications by default, anything on request,
+        never beyond the configured length bounds or when the cache is disabled."""
+        if self.audio_cache is None or not self.settings.cache.enabled or cache is False:
+            return False
+        if cache is None and mode != "notification":
+            return False
+        bounds = self.settings.cache
+        return bounds.min_text_chars <= len(text) <= bounds.max_text_chars
+
+    def _cache_key(self, text: str, voice: str | None) -> str:
+        vs = self.settings.tts.voicestudio
+        return AudioCache.key(
+            CacheKeyParts(
+                text=text,
+                voice=voice or vs.voice,
+                engine=vs.engine,
+                language=vs.language,
+                speed=vs.speed,
+                num_step=vs.num_step,
+                guidance_scale=vs.guidance_scale,
+                base_url=vs.base_url,
+            )
+        )
 
     def _remember(self, record: RequestRecord) -> None:
         self._records[record.id] = record

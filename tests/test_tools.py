@@ -67,6 +67,10 @@ async def test_tools_are_listed_with_annotations(settings, stack):
         assert tools["get_status"].annotations.read_only_hint is True
         assert tools["speak"].output_schema is not None
         assert "text" in tools["speak"].input_schema["required"]
+        assert "cache" in tools["speak"].input_schema["properties"]
+        assert "cache" in tools["notify"].input_schema["properties"]
+        assert "cached" in tools["speak"].output_schema["properties"]
+        assert "cache_hits" in tools["get_status"].output_schema["properties"]
 
 
 async def test_speak_status_stop_round_trip(settings, stack):
@@ -75,6 +79,7 @@ async def test_speak_status_stop_round_trip(settings, stack):
         result = await session.call_tool("speak", {"text": "Ciao dal test", "client_id": "pytest"})
         assert isinstance(result, CallToolResult) and not result.is_error
         assert result.structured_content["status"] == "playing"
+        assert result.structured_content["cached"] is False
         request_id = result.structured_content["request_id"]
         assert provider.calls[0][0] == "Ciao dal test"
         await player.wait_started()

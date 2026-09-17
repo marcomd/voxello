@@ -82,6 +82,19 @@ tts:
 Leave `voice` unset to use the server's default: VoiceStudio and omnivoice-server disagree on
 its name (`default` vs `auto`) and each rejects the other's.
 
+Phrases that repeat, such as the Claude Code hook alerts, are synthesized once and replayed from
+an on-disk audio cache. Notifications are cached by default, `speak` only on request, and only
+phrases up to `max_text_chars` qualify:
+
+```yaml
+cache:
+  enabled: true
+  # directory: ~/.cache/voxello/audio   # default: OS cache dir
+  max_entries: 200
+  max_age_days: 90
+  max_text_chars: 300
+```
+
 Environment variables override the file: `VOXELLO_VOICESTUDIO_URL`, `VOXELLO_VOICESTUDIO_API_KEY`,
 `VOXELLO_DEFAULT_VOICE`, `VOXELLO_LOG_LEVEL`, or any nested key as `VOXELLO_TTS__VOICESTUDIO__ENGINE`.
 `VOXELLO_CONFIG` points to an alternative config file. See `config.example.yaml` for every option.
@@ -95,6 +108,11 @@ voxello doctor                                  # provider reachable? player? no
 voxello speak "Build completata. Tutti i test passano."
 voxello speak "Salvami" --save                  # also writes ~/Voxello/<timestamp>_<id>.wav
 voxello notify "Refactoring completato." --channels voice,desktop
+voxello notify "Build completata." --no-cache   # notify caches by default; speak needs --cache
+voxello cache warm --hook-phrases --language it # pre-synthesize the Claude Code hook sentences
+voxello cache warm phrases.txt                  # one phrase per line ('-' reads stdin)
+voxello cache list                              # hash, size, length, voice, last use; never the text
+voxello cache clear
 ```
 
 ## Register with your agent
@@ -159,8 +177,10 @@ prompt or goes idle. The hook turns the event into a short spoken sentence ("Cla
 permesso per continuare.") and delivers it through `voxello notify`, so you hear it when you have
 walked away from the terminal. It looks for `voxello` on the PATH, then in `~/.local/bin`, then
 falls back to `uv run --directory "$VOXELLO_REPO"` if that variable points to a checkout; when none
-is available it logs to stderr and exits without speaking. This is the entry `voxello install
-claude` proposes for `~/.claude/settings.json`:
+is available it logs to stderr and exits without speaking. It passes `--cache`, so each sentence
+is synthesized once and later alerts play even while the TTS server is down; run
+`voxello cache warm --hook-phrases --language it` (or `en`) so the very first alert is instant.
+This is the entry `voxello install claude` proposes for `~/.claude/settings.json`:
 
 ```json
 {
@@ -203,12 +223,14 @@ project and by the agents' MCP configuration. `voxello doctor` reports which mod
 
 | Tool | Purpose | Key parameters |
 |---|---|---|
-| `speak` | synthesize and play text | `text`, `voice`, `interrupt` (default true), `save`, `play`, `mode`, `client_id` |
+| `speak` | synthesize and play text | `text`, `voice`, `interrupt` (default true), `save`, `play`, `mode`, `cache`, `client_id` |
 | `stop_speaking` | stop playback and clear the queue | optional `request_id` |
-| `get_status` | state, current request, queue, provider and player health | none |
-| `notify` | route a short message to `voice`, `desktop` and/or `file` | `message`, `channels`, `priority`, `title` |
+| `get_status` | state, current request, queue, cache hits, provider and player health | none |
+| `notify` | route a short message to `voice`, `desktop` and/or `file` | `message`, `channels`, `priority`, `title`, `cache` |
 
-`speak` returns metadata (`request_id`, `status`, `duration_ms`, `saved_path`), never audio.
+`speak` returns metadata (`request_id`, `status`, `duration_ms`, `saved_path`, `cached`), never
+audio. `cache` is tri-state: unset follows the policy (notifications yes, verbatim speech no),
+`true` caches a phrase the agent will repeat, `false` keeps one-off text out of the cache.
 Errors come back as tool errors with a stable code: `tts_provider_unavailable`,
 `tts_provider_unauthorized`, `voice_not_found`, `text_too_long`, `queue_full`,
 `playback_unavailable`, `notification_unavailable`.
@@ -222,6 +244,11 @@ Errors come back as tool errors with a stable code: `tts_provider_unavailable`,
 - **Private by default.** Temporary audio lives in the OS cache directory with 0700 permissions,
   gets random names, and is deleted after playback and after `storage.temp_retention_minutes`.
   Logs record text length, not text, unless `logging.log_text: true`.
+- **Cached phrases persist, hashed.** Cached audio lives in its own 0700 directory under a
+  SHA-256 of the text and synthesis parameters; the text itself is never written there. Only
+  notifications (or explicit `cache: true`) up to 300 characters are cached, the least recently
+  used entries are dropped beyond `cache.max_entries` or `cache.max_age_days`, and
+  `voxello cache clear` empties it. Set `cache.enabled: false` to keep every WAV short-lived.
 - **stdout is the protocol.** Logs go to stderr (and to `logging.file` if set).
 
 ## Troubleshooting
@@ -235,6 +262,9 @@ Errors come back as tool errors with a stable code: `tts_provider_unavailable`,
   is picked up automatically as an alternative.
 - No sound on Linux: install `mpv` or make sure `paplay`/`aplay` are on PATH; `doctor` shows what
   was detected. Force one with `playback.backend`.
+- A notification still plays with the old voice after you changed `voice` or `base_url`: it should
+  not, since both are part of the cache key, but `voxello cache clear` removes any doubt.
+  `voxello cache list` and `doctor` show what the cache holds.
 
 ## Development
 
@@ -253,7 +283,8 @@ and `docs/roadmap.md` (what comes next).
 ### Releasing
 
 The version lives only in `src/voxello/__init__.py` (`pyproject.toml` reads it through hatch).
-Bump it, commit, then tag and push:
+Bump it, move the `Unreleased` entries of `CHANGELOG.md` under the new version, commit, then tag
+and push:
 
 ```bash
 git tag v0.2.0 && git push origin v0.2.0

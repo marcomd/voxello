@@ -12,6 +12,7 @@ import pytest
 from voxello.config import Settings
 from voxello.core.service import VoxelloService
 from voxello.errors import TTS_PROVIDER_UNAVAILABLE, VoxelloError
+from voxello.storage.cache import AudioCache
 from voxello.storage.files import OutputStore, TempStore
 from voxello.tts.base import ProviderHealth, SynthesisResult, VoiceInfo
 
@@ -132,8 +133,17 @@ class FakeNotifier:
 def settings(tmp_path: Path) -> Settings:
     return Settings(
         storage={"temp_dir": tmp_path / "tmp", "temp_retention_minutes": 1},
+        cache={"directory": tmp_path / "cache"},
         output={"directory": tmp_path / "out"},
         playback={"max_queue_size": 3},
+    )
+
+
+def make_cache(settings: Settings) -> AudioCache:
+    return AudioCache(
+        settings.cache.resolved_directory(),
+        max_entries=settings.cache.max_entries,
+        max_age_days=settings.cache.max_age_days,
     )
 
 
@@ -163,6 +173,7 @@ async def service(
         notifier=notifier,
         temp_store=TempStore(settings.storage.resolved_temp_dir(), 1, True),
         output_store=OutputStore(settings.output.resolved_directory()),
+        audio_cache=make_cache(settings),
     )
     await svc.start()
     try:

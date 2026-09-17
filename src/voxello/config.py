@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 import yaml
 from platformdirs import user_cache_dir, user_config_dir
-from pydantic import BaseModel, Field, SecretStr, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 APP_NAME = "voxello"
@@ -93,6 +93,32 @@ class StorageSettings(BaseModel):
         return Path(user_cache_dir(APP_NAME)) / "tmp"
 
 
+class CacheSettings(BaseModel):
+    """Audio cache for phrases that repeat (roadmap milestone 2)."""
+
+    enabled: bool = True
+    directory: Path | None = Field(
+        default=None, description="Defaults to the OS cache dir, next to the temp dir."
+    )
+    max_entries: int = Field(default=200, ge=1)
+    max_age_days: int = Field(default=90, ge=1)
+    min_text_chars: int = Field(default=1, ge=1)
+    max_text_chars: int = Field(
+        default=300, ge=1, description="Only short phrases repeat; long answers are not cached."
+    )
+
+    def resolved_directory(self) -> Path:
+        if self.directory is not None:
+            return self.directory.expanduser()
+        return Path(user_cache_dir(APP_NAME)) / "audio"
+
+    @model_validator(mode="after")
+    def _check_bounds(self) -> CacheSettings:
+        if self.min_text_chars > self.max_text_chars:
+            raise ValueError("cache.min_text_chars must not exceed cache.max_text_chars")
+        return self
+
+
 class OutputSettings(BaseModel):
     save_by_default: bool = False
     directory: Path = Path("~/Voxello")
@@ -129,9 +155,18 @@ class Settings(BaseSettings):
     playback: PlaybackSettings = Field(default_factory=PlaybackSettings)
     notifications: NotificationsSettings = Field(default_factory=NotificationsSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
+    cache: CacheSettings = Field(default_factory=CacheSettings)
     output: OutputSettings = Field(default_factory=OutputSettings)
     limits: LimitsSettings = Field(default_factory=LimitsSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
+
+    @model_validator(mode="after")
+    def _separate_cache_and_temp(self) -> Settings:
+        # TempStore.owns() is what stops the service from deleting cache files; that guard
+        # only works while the two directories differ.
+        if self.cache.resolved_directory().resolve() == self.storage.resolved_temp_dir().resolve():
+            raise ValueError("cache.directory must differ from storage.temp_dir")
+        return self
 
     @classmethod
     def settings_customise_sources(
@@ -229,6 +264,14 @@ notifications:
 storage:
   temp_retention_minutes: 10
   cleanup_on_start: true
+
+cache:                                  # synthesize repeated phrases (hook alerts) only once
+  enabled: true
+  # directory: ~/.cache/voxello/audio   # default: OS cache dir, next to the temp dir
+  max_entries: 200
+  max_age_days: 90
+  min_text_chars: 1
+  max_text_chars: 300                   # short phrases only: long answers do not repeat
 
 output:
   save_by_default: false

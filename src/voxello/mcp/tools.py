@@ -74,6 +74,16 @@ def register_tools(mcp: MCPServer, holder: ServiceHolder) -> None:
         client_id: Annotated[
             str | None, Field(description="Optional identifier of the calling agent, for logs.")
         ] = None,
+        cache: Annotated[
+            bool | None,
+            Field(
+                description=(
+                    "Reuse or store the synthesized audio on disk for repeated phrases. Default: "
+                    "only for mode='notification'. Set true for a fixed phrase you will repeat, "
+                    "false for one-off text."
+                )
+            ),
+        ] = None,
     ) -> SpeechResult:
         service = holder.get()
         try:
@@ -85,6 +95,7 @@ def register_tools(mcp: MCPServer, holder: ServiceHolder) -> None:
                 play=play,
                 mode=mode,
                 client_id=client_id,
+                cache=cache,
             )
         except VoxelloError as exc:
             raise ToolError(str(exc)) from exc
@@ -160,6 +171,15 @@ def register_tools(mcp: MCPServer, holder: ServiceHolder) -> None:
         client_id: Annotated[
             str | None, Field(description="Optional identifier of the calling agent, for logs.")
         ] = None,
+        cache: Annotated[
+            bool | None,
+            Field(
+                description=(
+                    "Reuse or store the synthesized audio on disk. Default true: notifications "
+                    "repeat, so the same message is synthesized once. Set false for one-off text."
+                )
+            ),
+        ] = None,
     ) -> NotifyResult:
         service = holder.get()
         try:
@@ -169,6 +189,7 @@ def register_tools(mcp: MCPServer, holder: ServiceHolder) -> None:
                 priority=priority,
                 title=title,
                 client_id=client_id,
+                cache=cache,
             )
         except VoxelloError as exc:
             raise ToolError(str(exc)) from exc

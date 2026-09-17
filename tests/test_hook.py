@@ -85,6 +85,7 @@ def test_uses_voxello_on_path_english(tmp_path: Path):
         "voice,desktop",
         "--priority",
         "high",
+        "--cache",
     ]
 
 
@@ -102,6 +103,38 @@ def test_default_language_is_italian_and_channels_override(tmp_path: Path):
     args = log.read_text().splitlines()
     assert args[1] == "Claude Code ha finito e aspetta una tua risposta."
     assert args[2:4] == ["--channels", "desktop"]
+    assert args[-1] == "--cache"
+
+
+@pytest.mark.parametrize("language", ["it", "en"])
+def test_hook_sentences_match_message_files(tmp_path: Path, language: str):
+    """The bash script keeps a copy of the message YAML until roadmap 3.3; keep them equal."""
+    from voxello.install import hook_phrases
+
+    phrases = hook_phrases(language)
+    assert set(phrases) >= {
+        "permission_prompt",
+        "idle_prompt",
+        "agent_needs_input",
+        "agent_completed",
+        "elicitation_dialog",
+        "default",
+    }
+    cases = {k: v for k, v in phrases.items() if k != "default"}
+    cases["elicitation_url_dialog"] = phrases["elicitation_dialog"]
+    cases["something_unknown"] = phrases["default"]
+    for ntype, expected in cases.items():
+        log = tmp_path / f"{ntype}.log"
+        _fake_command(tmp_path / "bin", "voxello", log)
+        result = _run(
+            HOOK,
+            {"notification_type": ntype},
+            path=f"{tmp_path / 'bin'}{os.pathsep}{_system_path()}",
+            home=tmp_path,
+            VOXELLO_HOOK_LANG=language,
+        )
+        assert result.returncode == 0, result.stderr
+        assert log.read_text().splitlines()[1] == expected, ntype
 
 
 def test_unknown_type_falls_back_to_message(tmp_path: Path):

@@ -16,7 +16,9 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, Literal
 
-from voxello.errors import INVALID_SETTINGS_FILE, VoxelloError
+import yaml
+
+from voxello.errors import INVALID_PARAMETER, INVALID_SETTINGS_FILE, VoxelloError
 
 CLAUDE_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
 SKILL_NAME = "voice-notify"
@@ -40,6 +42,29 @@ def asset_bytes(*parts: str) -> bytes:
     for part in parts:
         node = node.joinpath(part)
     return node.read_bytes()
+
+
+def hook_languages() -> list[str]:
+    """Languages with a message file under ``voxello/assets/claude/messages``."""
+    node = resources.files("voxello").joinpath("assets", "claude", "messages")
+    return sorted(p.name.removesuffix(".yaml") for p in node.iterdir() if p.name.endswith(".yaml"))
+
+
+def hook_phrases(language: str) -> dict[str, str]:
+    """The sentences the Notification hook speaks for ``language`` (roadmap 2.2 / 3.3).
+
+    Keys are Claude Code ``notification_type`` values plus ``default``. Used by
+    ``voxello cache warm --hook-phrases`` and by the tests that keep the bash script in sync.
+    """
+    if language not in hook_languages():
+        raise VoxelloError(
+            INVALID_PARAMETER,
+            f"No hook phrases for language '{language}'. Available: {', '.join(hook_languages())}.",
+        )
+    loaded = yaml.safe_load(asset_bytes("claude", "messages", f"{language}.yaml")) or {}
+    if not isinstance(loaded, dict):
+        raise VoxelloError(INVALID_PARAMETER, f"Invalid hook phrases file for '{language}'.")
+    return {str(k): str(v) for k, v in loaded.items()}
 
 
 def default_claude_dir() -> Path:

@@ -28,6 +28,14 @@ storage:
   temp_retention_minutes: 10
   cleanup_on_start: true
 
+cache:                                  # synthesize repeated phrases (hook alerts) only once
+  enabled: true
+  # directory: ~/.cache/voxello/audio   # default: OS cache dir, next to the temp dir
+  max_entries: 200
+  max_age_days: 90
+  min_text_chars: 1
+  max_text_chars: 300                   # short phrases only: long answers do not repeat
+
 output:
   save_by_default: false
   directory: ~/Voxello

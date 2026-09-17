@@ -3,8 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
-from voxello.config import load_settings, resolve_config_path
+from voxello.config import EXAMPLE_CONFIG, Settings, load_settings, resolve_config_path
+
+REPO = Path(__file__).resolve().parents[1]
 
 
 def test_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -14,6 +17,29 @@ def test_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert settings.playback.default_interrupt is True
     assert settings.limits.max_text_chars == 2000
     assert settings.logging.log_text is False
+    assert settings.cache.enabled is True
+    assert settings.cache.max_entries == 200
+    assert settings.cache.max_age_days == 90
+    assert settings.cache.max_text_chars == 300
+    assert settings.cache.resolved_directory().name == "audio"
+    assert settings.cache.resolved_directory().parent == settings.storage.resolved_temp_dir().parent
+
+
+def test_cache_directory_must_differ_from_temp_dir(tmp_path: Path):
+    with pytest.raises(ValidationError, match="differ"):
+        Settings(storage={"temp_dir": tmp_path / "same"}, cache={"directory": tmp_path / "same"})
+    with pytest.raises(ValidationError, match="min_text_chars"):
+        Settings(cache={"min_text_chars": 10, "max_text_chars": 5})
+    settings = Settings(
+        storage={"temp_dir": tmp_path / "tmp"}, cache={"directory": tmp_path / "audio"}
+    )
+    assert settings.cache.resolved_directory() == tmp_path / "audio"
+
+
+def test_example_config_matches_repo_file():
+    """`voxello config init` writes EXAMPLE_CONFIG; config.example.yaml documents the same."""
+    assert (REPO / "config.example.yaml").read_text(encoding="utf-8") == EXAMPLE_CONFIG
+    assert "cache:" in EXAMPLE_CONFIG
 
 
 def test_yaml_then_env_precedence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

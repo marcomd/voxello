@@ -2,8 +2,8 @@
 
 ``voxello`` (or ``voxello serve``) runs the MCP server over stdio. The other
 subcommands are for humans: ``doctor`` checks the setup, ``speak`` does a full
-round trip without an agent, ``config`` manages the config file, ``install claude``
-sets up the Claude Code skill and hook.
+round trip without an agent, ``config`` manages the config file, ``cache`` inspects
+and pre-fills the audio cache, ``install claude`` sets up the Claude Code skill and hook.
 """
 
 from __future__ import annotations
@@ -11,8 +11,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from voxello import __version__
@@ -23,7 +25,7 @@ from voxello.config import (
     load_settings,
     resolve_config_path,
 )
-from voxello.errors import VoxelloError
+from voxello.errors import INVALID_PARAMETER, VoxelloError
 from voxello.logging_setup import configure_logging
 
 log = logging.getLogger(__name__)
@@ -46,6 +48,12 @@ def build_parser() -> argparse.ArgumentParser:
     speak.add_argument("--voice", default=None)
     speak.add_argument("--save", action="store_true", help="Persist the audio file")
     speak.add_argument("--no-play", action="store_true", help="Do not play the audio")
+    speak.add_argument(
+        "--cache",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Reuse cached audio for repeated phrases (default: off for speak)",
+    )
 
     notify = sub.add_parser("notify", help="Send a notification through the configured channels")
     notify.add_argument("message")
@@ -53,6 +61,36 @@ def build_parser() -> argparse.ArgumentParser:
     notify.add_argument(
         "--priority", default="normal", choices=["low", "normal", "high", "critical"]
     )
+    notify.add_argument(
+        "--cache",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Reuse cached audio for repeated phrases (default: on for notify)",
+    )
+
+    cache = sub.add_parser("cache", help="Inspect, clear or pre-fill the audio cache")
+    cache_sub = cache.add_subparsers(dest="cache_command", required=True)
+    cache_sub.add_parser("list", help="List cached phrases (hash, size, length, voice, last use)")
+    cache_sub.add_parser("clear", help="Delete every cached phrase")
+    warm = cache_sub.add_parser(
+        "warm",
+        help="Synthesize a list of phrases into the cache ahead of time",
+        description=(
+            "Reads one phrase per line from FILE (or stdin with '-'), or the Claude Code hook "
+            "sentences with --hook-phrases, and synthesizes the ones not cached yet so the "
+            "first alert does not wait for the TTS server."
+        ),
+    )
+    warm.add_argument("source", nargs="?", help="Text file with one phrase per line, or '-'")
+    warm.add_argument(
+        "--hook-phrases", action="store_true", help="Warm the Claude Code hook sentences"
+    )
+    warm.add_argument(
+        "--language",
+        default=None,
+        help="Language of the hook sentences (default: $VOXELLO_HOOK_LANG or it)",
+    )
+    warm.add_argument("--voice", default=None, help="Voice id; omit for the configured default")
 
     config = sub.add_parser("config", help="Manage the configuration file")
     config_sub = config.add_subparsers(dest="config_command", required=True)
@@ -114,6 +152,8 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(cmd_notify(_load(args), args))
         if command == "config":
             return cmd_config(args)
+        if command == "cache":
+            return cmd_cache(_load(args), args)
         if command == "install":
             return cmd_install(args)
     except VoxelloError as exc:
@@ -195,6 +235,7 @@ async def cmd_doctor(settings: Settings, config_path: Path | None) -> int:
     print(f"Desktop notifications: {notifier or 'no tool found'}")
     print(f"Temp dir: {settings.storage.resolved_temp_dir()}")
     print(f"Output dir: {settings.output.resolved_directory()}")
+    print(describe_cache(settings))
     del VoxelloService  # imported only to fail fast on broken installs
     print("Result:", "OK" if ok else "PROBLEMS FOUND")
     return 0 if ok else 1
@@ -207,7 +248,12 @@ async def cmd_speak(settings: Settings, args: argparse.Namespace) -> int:
     await service.start()
     try:
         result = await service.speak(
-            args.text, voice=args.voice, save=args.save, play=not args.no_play, interrupt=True
+            args.text,
+            voice=args.voice,
+            save=args.save,
+            play=not args.no_play,
+            interrupt=True,
+            cache=args.cache,
         )
         print(result.model_dump_json(indent=2))
         if service.playback is not None and not args.no_play:
@@ -224,13 +270,116 @@ async def cmd_notify(settings: Settings, args: argparse.Namespace) -> int:
     service = VoxelloService.from_settings(settings)
     await service.start()
     try:
-        result = await service.notify(args.message, channels=channels, priority=args.priority)
+        result = await service.notify(
+            args.message, channels=channels, priority=args.priority, cache=args.cache
+        )
         print(result.model_dump_json(indent=2))
         if service.playback is not None:
             await service.playback.wait_idle()
     finally:
         await service.aclose()
     return 0 if result.status != "failed" else 1
+
+
+def describe_cache(settings: Settings) -> str:
+    """One ``doctor`` line: where the cache is and how full it is."""
+    from voxello.core.service import VoxelloService
+
+    cache = VoxelloService.cache_from_settings(settings)
+    if cache is None:
+        return "Cache: disabled"
+    count, size = cache.stats()
+    limits = f"max {settings.cache.max_entries} entries / {settings.cache.max_age_days} days"
+    return f"Cache: {cache.directory} ({count} entries, {_human_size(size)}, {limits})"
+
+
+def _human_size(size: int) -> str:
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.0f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
+def cmd_cache(settings: Settings, args: argparse.Namespace) -> int:
+    from voxello.core.service import VoxelloService
+
+    cache = VoxelloService.cache_from_settings(settings)
+    if cache is None:
+        print("The audio cache is disabled (cache.enabled: false).", file=sys.stderr)
+        return 1
+    if args.cache_command == "list":
+        entries = cache.entries()
+        for entry in entries:
+            used = datetime.fromtimestamp(entry.last_used).strftime("%Y-%m-%d %H:%M")
+            print(
+                f"{entry.key[:12]}  {_human_size(entry.size):>7}  chars={entry.text_chars:<4} "
+                f"voice={entry.voice}  last used {used}"
+            )
+        total = sum(e.size for e in entries)
+        plural = "y" if len(entries) == 1 else "ies"
+        print(f"{len(entries)} entr{plural}, {_human_size(total)} in {cache.directory}")
+        return 0
+    if args.cache_command == "clear":
+        removed = cache.clear()
+        print(
+            f"Removed {removed} cached phrase{'s' if removed != 1 else ''} from {cache.directory}"
+        )
+        return 0
+    if args.cache_command == "warm":
+        return asyncio.run(cmd_cache_warm(settings, args))
+    return 2
+
+
+def _read_phrases(args: argparse.Namespace) -> list[str]:
+    from voxello import install
+
+    if args.hook_phrases and args.source:
+        raise VoxelloError(INVALID_PARAMETER, "Pass either FILE or --hook-phrases, not both.")
+    if args.hook_phrases:
+        language = args.language or os.environ.get("VOXELLO_HOOK_LANG") or "it"
+        return list(dict.fromkeys(install.hook_phrases(language).values()))
+    if not args.source:
+        raise VoxelloError(
+            INVALID_PARAMETER, "Pass a FILE with one phrase per line, '-' or --hook-phrases."
+        )
+    try:
+        content = sys.stdin.read() if args.source == "-" else Path(args.source).read_text("utf-8")
+    except OSError as exc:
+        raise VoxelloError(INVALID_PARAMETER, f"Could not read {args.source}: {exc}") from exc
+    lines = [line.strip() for line in content.splitlines()]
+    return list(dict.fromkeys(line for line in lines if line and not line.startswith("#")))
+
+
+async def cmd_cache_warm(settings: Settings, args: argparse.Namespace) -> int:
+    from voxello.core.service import VoxelloService
+
+    phrases = _read_phrases(args)
+    if not phrases:
+        print("No phrases to warm.", file=sys.stderr)
+        return 1
+    service = VoxelloService.from_settings(settings)
+    await service.start()
+    synthesized = already = failed = 0
+    try:
+        for phrase in phrases:
+            try:
+                result = await service.speak(
+                    phrase, voice=args.voice, play=False, mode="notification", cache=True
+                )
+            except VoxelloError as exc:
+                failed += 1
+                print(f"error: {exc}", file=sys.stderr)
+                continue
+            if result.cached:
+                already += 1
+            else:
+                synthesized += 1
+    finally:
+        await service.aclose()
+    plural = "" if synthesized == 1 else "s"
+    print(f"Warmed {synthesized} phrase{plural} ({already} already cached, {failed} failed)")
+    return 0 if failed == 0 else 1
 
 
 def describe_installation() -> list[str]:

@@ -65,6 +65,7 @@ class RequestRecord:
     saved_path: Path | None = None
     duration_ms: int | None = None
     error: str | None = None
+    cached: bool = False
 
     def set_state(self, state: RequestState) -> None:
         self.state = state
@@ -80,6 +81,9 @@ class SpeechResult(BaseModel):
     saved_path: str | None = None
     provider: str
     voice: str
+    cached: bool = Field(
+        default=False, description="True when the audio came from the on-disk cache."
+    )
 
 
 class StopResult(BaseModel):
@@ -121,6 +125,7 @@ class StatusReport(BaseModel):
     provider: str
     voice: str
     queue_length: int
+    cache_hits: int = Field(default=0, description="Cache hits since the server started.")
     health: HealthReport
     recent: list[RequestSummary] = Field(default_factory=list)
 
