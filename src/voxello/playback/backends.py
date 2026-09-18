@@ -80,6 +80,10 @@ class Ffplay(PlayerBackend):
 
 @dataclass(frozen=True)
 class PowerShellSoundPlayer(PlayerBackend):
+    """``System.Media.SoundPlayer`` through a PowerShell host: Windows PowerShell 5.1
+    (``powershell``) or PowerShell 7 (``pwsh``). WAV only, no volume control, so
+    ``playback.volume`` is ignored on Windows. See ``docs/windows-testing.md``."""
+
     name: str = "powershell"
     executable: str = "powershell"
     supports_volume: bool = False
@@ -92,11 +96,20 @@ class PowerShellSoundPlayer(PlayerBackend):
 
 
 ALL_BACKENDS: dict[str, PlayerBackend] = {
-    b.name: b for b in (Afplay(), Mpv(), Paplay(), Aplay(), Ffplay(), PowerShellSoundPlayer())
+    b.name: b
+    for b in (
+        Afplay(),
+        Mpv(),
+        Paplay(),
+        Aplay(),
+        Ffplay(),
+        PowerShellSoundPlayer(),
+        PowerShellSoundPlayer(name="pwsh", executable="pwsh"),
+    )
 }
 
 PLATFORM_PREFERENCES: dict[str, tuple[str, ...]] = {
     "darwin": ("afplay", "mpv", "ffplay"),
     "linux": ("mpv", "paplay", "aplay", "ffplay"),
-    "win32": ("powershell", "mpv", "ffplay"),
+    "win32": ("powershell", "pwsh", "mpv", "ffplay"),
 }

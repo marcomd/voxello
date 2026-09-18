@@ -187,7 +187,21 @@ under `integration` as 3.4 suggested, so CI keeps running them.
 - A hook script test (bash, marked `integration`) that checks the arguments passed to a fake
   `voxello` on the PATH.
 
-## Milestone 4 — Quality and robustness
+## Milestone 4 — Quality and robustness (done 2026-09-18)
+
+Delivered: MCP-level tests for `notify` (`partial`, `failed`, file channel) next to the existing
+service-level ones; `tts.voicestudio.connect_timeout_seconds`, `retries` and
+`retry_backoff_seconds` with a retry loop in the provider (connection errors and HTTP 502/503/504
+only, never 4xx or read timeouts, `attempts` in the error details) and two tests pinning the
+`_synth_lock` behaviour (a cache hit never waits); `doctor` groups voices by language, warns
+about configured voices missing from the server list and gains `--synth`/`--language` for a timed
+sample phrase (its provider is injectable, so the healthy branch is finally tested); `pwsh` as a
+playback-only Windows fallback, a `windows-latest` unit-test leg in CI and the manual procedure
+in `docs/windows-testing.md`; `release.yml` runs `ci.yml` as a reusable workflow on the tagged
+commit before building. Deviations: the Windows item is verified only for command construction
+and with fakes in CI; the checklist still has to be executed on a real Windows machine and its
+results table filled in. The missing-voice check is a warning rather than a failure because
+omnivoice-server accepts ids its list may not expose.
 
 - **End-to-end tests for the `notify` tool**: cover the `partial` result when the desktop
   channel fails and the voice channel works.
@@ -225,9 +239,10 @@ In estimated order of usefulness, all at the same low priority until milestones 
 | 3 | 3.3 | Done: hook passes language; sentences come from the message files |
 | 4 | 1.1 + 1.2 | Done: global tool installation, hook independent of the checkout |
 | 5 | 3.2, 1.3 | Done: `voices_by_language`, `warm`, 1.3 |
-| 6 | Milestone 4 | CI and robustness before publishing |
+| 6 | Milestone 4 | Done: retry, `doctor --synth`, Windows CI leg and checklist, gated release |
 | 7 | Milestone 5 | On demand |
 
 Items 3.1 and 2.x were done before the first PyPI release (1.1) because they change the MCP
 tool signatures and the configuration layout: better to do that before external installations
-exist that would need migrating. Next: milestone 4.
+exist that would need migrating. Next: run `docs/windows-testing.md` on a Windows machine, then
+milestone 5 on demand.

@@ -25,7 +25,7 @@ uv run pytest tests/test_queue.py -k interrupt    # one test by keyword
 uv run pytest -m integration tests/integration    # real afplay; real TTS if VOXELLO_VOICESTUDIO_URL is set
 uv run ruff check src tests && uv run ruff format --check src tests
 uv run pyright src                                # pyright only covers src/, not tests/
-uv run voxello doctor                             # check config, TTS server, player, notifier
+uv run voxello doctor [--synth] [-l en]           # check config, TTS server, voices per language, player, notifier
 uv run voxello speak "text" [--save] [--cache] [-l en]
 uv run voxello notify "text" --channels voice,desktop [--no-cache] [-l en]
 echo '{"notification_type":"idle_prompt"}' | uv run voxello hook notification -l it   # what the Claude Code hook runs
@@ -80,7 +80,18 @@ Layers, top to bottom, each depending only on the ones below:
 - `tts/voicestudio.py` is the only provider. It speaks `POST /v1/audio/speech` and probes
   alternative paths for voices/engines because VoiceStudio and omnivoice-server differ
   (`VOICES_PATHS`, `ENGINES_PATHS`). HTTP failures are translated into stable error codes.
+  `_post_speech` retries `tts.voicestudio.retries` times (default 1) with exponential backoff
+  from `retry_backoff_seconds` on connection-phase failures (`RETRIABLE_EXCEPTIONS`) and HTTP
+  502/503/504 (`RETRIABLE_STATUSES`); 4xx and read timeouts are never retried because a slow
+  server would double the time `_synth_lock` is held. `details["attempts"]` is set on the error.
 - `notifications/desktop.py` picks `terminal-notifier`, `osascript`, `notify-send` or PowerShell.
+  On Windows the toast needs Windows PowerShell 5.1 (`powershell`); `pwsh` is a playback-only
+  fallback (`playback/backends.py`) because the WinRT projection is unavailable in PowerShell 7.
+  Windows is unit-tested for command construction and runs in CI with fakes only; the real-audio
+  procedure is `docs/windows-testing.md`.
+- `cli.py` `cmd_doctor` accepts an injected `TTSProvider` for tests; `describe_voices` groups the
+  server's voices by language and warns (without failing) when a configured voice is not listed;
+  `--synth` times one sample phrase with the voice `core.service.resolve_voice` would pick.
 - `config.py` uses `pydantic-settings` with a YAML file (path from `platformdirs`, override with
   `VOXELLO_CONFIG`) and `VOXELLO_*` env vars, nested keys with `__`. `speech.default_language`
   (alias `VOXELLO_LANGUAGE`) and `speech.voices_by_language` hold the language defaults;
@@ -137,8 +148,9 @@ warns on duplicate scopes).
 Bump `__version__` in `src/voxello/__init__.py` (pyproject reads it via hatch), move the
 `Unreleased` section of `CHANGELOG.md` under the new version with today's date, commit, tag
 `vX.Y.Z` and push the tag. Every user-visible change gets a line under `Unreleased`.
-`.github/workflows/release.yml` checks the tag matches, builds, creates the GitHub release and
-publishes to PyPI with trusted publishing (environment `pypi`).
+`.github/workflows/release.yml` first runs `ci.yml` as a reusable workflow on the tagged commit
+(nothing is built if a check fails), then checks the tag matches, builds, creates the GitHub
+release and publishes to PyPI with trusted publishing (environment `pypi`).
 
 ## Licensing note
 

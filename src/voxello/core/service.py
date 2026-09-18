@@ -519,26 +519,10 @@ class VoxelloService:
 
     def _validate_language(self, language: str | None) -> str:
         """Effective ISO 639-1 code (roadmap 3.1): the request's, else the configured default."""
-        if language is None:
-            return self.settings.speech.default_language
-        normalized = language.strip().lower() if isinstance(language, str) else ""
-        if not LANGUAGE_RE.fullmatch(normalized):
-            raise VoxelloError(
-                INVALID_LANGUAGE,
-                f"Invalid language {language!r}: pass a two-letter ISO 639-1 code such as "
-                "'it' or 'en'.",
-            )
-        return normalized
+        return normalize_language(language, self.settings.speech.default_language)
 
     def _resolve_voice(self, voice: str | None, language: str) -> str | None:
-        """Voice precedence (roadmap 3.2): request voice, then the per-language map, then the
-        global voice; ``None`` leaves the choice to the server."""
-        if voice:
-            return voice
-        mapped = self.settings.speech.voices_by_language.get(language)
-        if mapped:
-            return mapped
-        return self.settings.tts.voicestudio.voice
+        return resolve_voice(self.settings, voice, language)
 
     def _cache_allowed(self, text: str, mode: SpeechMode, cache: bool | None) -> bool:
         """Cache policy (roadmap 2.2): notifications by default, anything on request,
@@ -595,3 +579,35 @@ class VoxelloService:
             record.audio_path = None
         self.temp_store.discard(item.path)
         log.info("playback %s -> %s", item.request_id, outcome)
+
+
+def normalize_language(language: str | None, default: str) -> str:
+    """Strip, lowercase and validate an ISO 639-1 code; ``None`` means ``default``.
+
+    Shared by the service and by ``doctor --language`` so both reject the same input.
+    """
+    if language is None:
+        return default
+    normalized = language.strip().lower() if isinstance(language, str) else ""
+    if not LANGUAGE_RE.fullmatch(normalized):
+        raise VoxelloError(
+            INVALID_LANGUAGE,
+            f"Invalid language {language!r}: pass a two-letter ISO 639-1 code such as "
+            "'it' or 'en'.",
+        )
+    return normalized
+
+
+def resolve_voice(settings: Settings, voice: str | None, language: str) -> str | None:
+    """Voice precedence (roadmap 3.2): request voice, then ``speech.voices_by_language``, then
+    the global ``tts.voicestudio.voice``; ``None`` leaves the choice to the server.
+
+    The service fixes the voice once with this function so the provider call and the cache
+    key agree; ``doctor --synth`` uses it to test the voice a request would really get.
+    """
+    if voice:
+        return voice
+    mapped = settings.speech.voices_by_language.get(language)
+    if mapped:
+        return mapped
+    return settings.tts.voicestudio.voice

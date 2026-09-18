@@ -50,6 +50,7 @@ class FakeProvider:
         self.fail_with: VoxelloError | None = None
         self.duration_ms = 500
         self.delay = 0.0
+        self.voices: list[VoiceInfo] = [VoiceInfo("default", "Default")]
 
     async def synthesize(
         self, text: str, voice: str | None = None, language: str | None = None
@@ -64,7 +65,10 @@ class FakeProvider:
         )
 
     async def list_voices(self) -> list[VoiceInfo]:
-        return [VoiceInfo("default", "Default")]
+        return list(self.voices)
+
+    async def list_engines(self) -> list[str]:
+        return ["omnivoice"]
 
     async def health(self) -> ProviderHealth:
         if self.fail_with is not None and self.fail_with.code == TTS_PROVIDER_UNAVAILABLE:

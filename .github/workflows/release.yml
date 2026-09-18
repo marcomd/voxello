@@ -1,20 +1,36 @@
 # Release: push a tag `vX.Y.Z` that matches `__version__` in src/voxello/__init__.py.
-# The workflow builds the sdist and wheel, attaches them to a GitHub release and publishes
-# to PyPI through trusted publishing (no API token stored in the repo). One-time setup on
-# pypi.org: project `voxello` -> Publishing -> add a GitHub publisher with owner `marcomd`,
-# repository `voxello`, workflow `release.yml`, environment `pypi`.
+# The workflow first runs the CI matrix (ruff, pyright, pytest with the coverage floor) on the
+# tagged commit, then builds the sdist and wheel, attaches them to a GitHub release and
+# publishes to PyPI through trusted publishing (no API token stored in the repo). A tag on a
+# commit that fails the checks publishes nothing. One-time setup on pypi.org: project
+# `voxello` -> Publishing -> add a GitHub publisher with owner `marcomd`, repository `voxello`,
+# workflow `release.yml`, environment `pypi`.
 name: Release
 
 on:
   push:
     tags: ["v*"]
 
+permissions:
+  contents: read
+
+# One release at a time per tag; never cancel a publish that is already running.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
   build:
+    needs: checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
       - name: Check that the tag matches the package version
         run: |
           set -euo pipefail

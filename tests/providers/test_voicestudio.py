@@ -315,3 +315,143 @@ async def test_discovery_network_failure_is_unavailable():
         assert exc.value.code == TTS_PROVIDER_UNAVAILABLE
     finally:
         await provider.aclose()
+
+
+# -- retry policy (roadmap milestone 4) ------------------------------------------------------
+
+
+def flaky(failures: list, then: httpx2.Response):
+    """Handler that raises/returns each item of ``failures`` in turn, then answers ``then``."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if failures:
+            failure = failures.pop(0)
+            if isinstance(failure, BaseException):
+                raise failure
+            return failure
+        return then
+
+    return handler
+
+
+def ok_wav() -> httpx2.Response:
+    return httpx2.Response(200, content=make_wav(100), headers={"content-type": "audio/wav"})
+
+
+async def test_connection_error_is_retried_once_then_succeeds():
+    handler = flaky([httpx2.ConnectError("refused")], ok_wav())
+    provider, seen = make_provider(handler, retry_backoff_seconds=0)
+    try:
+        result = await provider.synthesize("ciao")
+        assert result.mime_type == "audio/wav"
+        assert len(seen) == 2
+    finally:
+        await provider.aclose()
+
+
+async def test_connection_error_gives_up_after_configured_retries():
+    handler = flaky([httpx2.ConnectError("refused"), httpx2.ConnectError("refused")], ok_wav())
+    provider, seen = make_provider(handler, retries=1, retry_backoff_seconds=0)
+    try:
+        with pytest.raises(VoxelloError) as exc:
+            await provider.synthesize("ciao")
+        assert exc.value.code == TTS_PROVIDER_UNAVAILABLE
+        assert exc.value.details["attempts"] == 2
+        assert exc.value.details["reason"] == "ConnectError"
+        assert len(seen) == 2
+    finally:
+        await provider.aclose()
+
+
+@pytest.mark.parametrize("status", [502, 503, 504])
+async def test_transient_gateway_status_is_retried(status):
+    handler = flaky([httpx2.Response(status, json={"detail": "loading"})], ok_wav())
+    provider, seen = make_provider(handler, retry_backoff_seconds=0)
+    try:
+        result = await provider.synthesize("ciao")
+        assert result.mime_type == "audio/wav"
+        assert len(seen) == 2
+    finally:
+        await provider.aclose()
+
+
+async def test_retries_zero_disables_retrying():
+    handler = flaky([httpx2.Response(503, json={"detail": "loading"})], ok_wav())
+    provider, seen = make_provider(handler, retries=0, retry_backoff_seconds=0)
+    try:
+        with pytest.raises(VoxelloError) as exc:
+            await provider.synthesize("ciao")
+        assert exc.value.code == TTS_PROVIDER_ERROR
+        assert exc.value.details["http_status"] == 503
+        assert exc.value.details["attempts"] == 1
+        assert len(seen) == 1
+    finally:
+        await provider.aclose()
+
+
+@pytest.mark.parametrize("status", [400, 401, 404, 422, 429, 500])
+async def test_non_transient_status_is_never_retried(status):
+    handler = flaky([httpx2.Response(status, json={"detail": "no"})], ok_wav())
+    provider, seen = make_provider(handler, retries=3, retry_backoff_seconds=0)
+    try:
+        with pytest.raises(VoxelloError) as exc:
+            await provider.synthesize("ciao", voice="x")
+        assert exc.value.details["http_status"] == status
+        assert len(seen) == 1
+    finally:
+        await provider.aclose()
+
+
+@pytest.mark.parametrize(
+    ("exc_type", "retried"),
+    [
+        (httpx2.ConnectTimeout, True),
+        (httpx2.ReadError, True),
+        (httpx2.ReadTimeout, False),
+        (httpx2.WriteTimeout, False),
+        (httpx2.PoolTimeout, False),
+    ],
+)
+async def test_timeouts_are_unavailable_and_only_connect_phase_is_retried(exc_type, retried):
+    handler = flaky([exc_type("slow")], ok_wav())
+    provider, seen = make_provider(handler, retries=1, retry_backoff_seconds=0)
+    try:
+        if retried:
+            await provider.synthesize("ciao")
+            assert len(seen) == 2
+        else:
+            with pytest.raises(VoxelloError) as exc:
+                await provider.synthesize("ciao")
+            assert exc.value.code == TTS_PROVIDER_UNAVAILABLE
+            assert exc.value.details["reason"] == exc_type.__name__
+            assert exc.value.details["attempts"] == 1
+            assert len(seen) == 1
+    finally:
+        await provider.aclose()
+
+
+async def test_backoff_doubles_between_attempts(monkeypatch):
+    slept: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr("voxello.tts.voicestudio.asyncio.sleep", fake_sleep)
+    failures = [httpx2.ConnectError("refused"), httpx2.Response(503), httpx2.ConnectError("x")]
+    provider, seen = make_provider(flaky(failures, ok_wav()), retries=3, retry_backoff_seconds=0.5)
+    try:
+        await provider.synthesize("ciao")
+        assert slept == [0.5, 1.0, 2.0]
+        assert len(seen) == 4
+    finally:
+        await provider.aclose()
+
+
+async def test_connect_timeout_setting_reaches_the_client():
+    provider, _ = make_provider(lambda _: ok_wav(), connect_timeout_seconds=2.5, timeout_seconds=30)
+    try:
+        timeout = provider._client.timeout
+        assert timeout.connect == 2.5
+        assert timeout.read == 30
+    finally:
+        await provider.aclose()

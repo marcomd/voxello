@@ -22,7 +22,9 @@ Agent ──MCP──▶ Voxello ──HTTP──▶ VoiceStudio / omnivoice-ser
   (port 3900, API runs while the app is open) or [omnivoice-server](https://github.com/maemreyo/omnivoice-server)
   (port 8880, headless). New to this? [docs/TUTORIAL.md](docs/TUTORIAL.md) walks through installing
   `omnivoice-server` on Windows with an NVIDIA GPU and on Apple Silicon, starting it and testing it with curl.
-- An audio player: `afplay` (macOS, built in), `mpv`/`paplay`/`aplay`/`ffplay` (Linux), PowerShell (Windows)
+- An audio player: `afplay` (macOS, built in), `mpv`/`paplay`/`aplay`/`ffplay` (Linux), PowerShell
+  (Windows: `powershell` or `pwsh`; implemented and unit-tested but not yet verified with real
+  audio, see [docs/windows-testing.md](docs/windows-testing.md))
 
 ## Install
 
@@ -87,6 +89,12 @@ speech:
 Leave `voice` unset to use the server's default: VoiceStudio and omnivoice-server disagree on
 its name (`default` vs `auto`) and each rejects the other's.
 
+A synthesis request waits `connect_timeout_seconds` (5) to reach the server and
+`timeout_seconds` (120) for the audio. When the connection fails or the server answers HTTP
+502/503/504 (typically while the model is still loading) the request is retried `retries` times
+(1) after `retry_backoff_seconds` (0.5, doubled at every further retry). A 4xx answer or a read
+timeout is never retried. All four live under `tts.voicestudio`.
+
 The language is chosen per request: agents pass `language` (ISO 639-1, `it`, `en`, ...) with the
 text, the CLI takes `--language/-l`, and `speech.default_language` covers calls that pass none.
 Cloned voices often sound best in one language, so an optional map picks the voice from the
@@ -127,7 +135,8 @@ Environment variables override the file: `VOXELLO_VOICESTUDIO_URL`, `VOXELLO_VOI
 ## Try it without an agent
 
 ```bash
-voxello doctor                                  # provider reachable? player? notifier?
+voxello doctor                                  # provider reachable? voices per language? player? notifier?
+voxello doctor --synth -l en                    # also synthesize a sample phrase and time it
 voxello speak "Build completata. Tutti i test passano."
 voxello speak "Build finished. All tests pass." --language en   # -l en: pronunciation follows the text
 voxello speak "Salvami" --save                  # also writes ~/Voxello/<timestamp>_<id>.wav
@@ -285,7 +294,9 @@ back as tool errors with a stable code: `tts_provider_unavailable`, `tts_provide
 - `tts_provider_unavailable`: the TTS server is down or `base_url` is wrong. VoiceStudio's API only
   runs while the desktop app is open; `omnivoice-server` runs headless.
 - `tts_provider_unauthorized`: the host is remote and needs `api_key` (`OMNIVOICE_API_KEY` on the server).
-- `voice_not_found`: the voice id does not exist on this server; `voxello doctor` lists the valid ids.
+- `voice_not_found`: the voice id does not exist on this server; `voxello doctor` lists the valid ids
+  per language and warns when a configured `voice` or `voices_by_language` entry is not among them.
+  `doctor --synth` synthesizes a sample phrase with the voice a request would really get.
 - No desktop notification on macOS: the terminal app hosting the agent needs notification
   permission in System Settings. Installing `terminal-notifier` (`brew install terminal-notifier`)
   is picked up automatically as an alternative.
@@ -329,17 +340,20 @@ and push:
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-`.github/workflows/release.yml` checks that the tag matches `__version__`, builds the sdist and
-wheel, smoke-tests the wheel, creates a GitHub release with the files and publishes to PyPI through
-[trusted publishing](https://docs.pypi.org/trusted-publishers/). One-time setup on pypi.org: add a
-GitHub publisher for project `voxello` with owner `marcomd`, repository `voxello`, workflow
-`release.yml`, environment `pypi`, and create the `pypi` environment in the GitHub repository
-settings. `ci.yml` runs ruff, pyright and pytest with coverage on macOS and Linux with Python
-3.12–3.14 for pushes to `main` and pull requests; it also supports manual runs from the Actions
-tab once the workflow is on the default branch. Each job uses the lockfile, enforces the coverage
-threshold and builds the package. Tests requiring real audio hardware or a live TTS server are
-excluded from CI. Coverage reports are uploaded as workflow artifacts and retained for 14 days.
-Superseded runs are cancelled, and each job has a 15-minute timeout.
+`.github/workflows/release.yml` first runs the CI matrix on the tagged commit (a tag on a commit
+that fails the checks publishes nothing), then checks that the tag matches `__version__`, builds
+the sdist and wheel, smoke-tests the wheel, creates a GitHub release with the files and publishes
+to PyPI through [trusted publishing](https://docs.pypi.org/trusted-publishers/). One-time setup on
+pypi.org: add a GitHub publisher for project `voxello` with owner `marcomd`, repository `voxello`,
+workflow `release.yml`, environment `pypi`, and create the `pypi` environment in the GitHub
+repository settings. `ci.yml` runs ruff, pyright and pytest with coverage on macOS and Linux with
+Python 3.12–3.14 for pushes to `main` and pull requests, plus one Windows leg (Python 3.12) that
+runs the same suite with fakes and without the coverage floor, since POSIX-only branches are
+skipped there; it also supports manual runs from the Actions tab once the workflow is on the
+default branch. Each job uses the lockfile, enforces the coverage threshold and builds the
+package. Tests requiring real audio hardware or a live TTS server are excluded from CI. Coverage
+reports are uploaded as workflow artifacts and retained for 14 days. Superseded CI runs are
+cancelled, and each job has a 15-minute timeout.
 
 ## Licensing
 

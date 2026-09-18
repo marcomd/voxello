@@ -67,7 +67,24 @@ class VoiceStudioSettings(BaseModel):
     speed: float | None = Field(default=None, ge=0.25, le=4.0)
     num_step: int | None = Field(default=None, ge=1, le=128)
     guidance_scale: float | None = Field(default=None, ge=0, le=20)
-    timeout_seconds: float = Field(default=120, gt=0)
+    timeout_seconds: float = Field(
+        default=120, gt=0, description="Read/write timeout of one synthesis request."
+    )
+    connect_timeout_seconds: float = Field(
+        default=5, gt=0, description="Time allowed to open the TCP connection."
+    )
+    retries: int = Field(
+        default=1,
+        ge=0,
+        le=5,
+        description="Extra attempts after a connection failure or an HTTP 502/503/504; "
+        "4xx answers and read timeouts are never retried.",
+    )
+    retry_backoff_seconds: float = Field(
+        default=0.5,
+        ge=0,
+        description="Wait before the first retry; each further retry doubles it.",
+    )
 
     @field_validator("base_url")
     @classmethod
@@ -317,7 +334,10 @@ tts:
     # api_key: "change-me"              # required when VoiceStudio is on another host
     # voice: alloy                      # omit for the server default; VoiceStudio: profile id
     engine: omnivoice                   # VoiceStudio: voxcpm2, cosyvoice, mlx-audio, kittentts, ...
-    timeout_seconds: 120
+    timeout_seconds: 120                # read timeout of one synthesis request
+    connect_timeout_seconds: 5
+    retries: 1                          # retry once on connection errors and HTTP 502/503/504
+    retry_backoff_seconds: 0.5          # doubled at every further retry
 
 speech:
   default_language: it                  # ISO 639-1; agents pass `language` per request
