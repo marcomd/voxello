@@ -110,6 +110,11 @@
     "description": "Cannot proceed until a named dependency or blocker is resolved."
   },
   {
+    "name": "status:to-approve",
+    "color": "f9d0c4",
+    "description": "Waiting for approval before proceeding."
+  },
+  {
     "name": "good first issue",
     "color": "7057ff",
     "description": "Well-scoped work suitable for a first contribution."

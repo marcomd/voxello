@@ -14,6 +14,8 @@ Per-request language selection (roadmap milestone 3).
 - Shared contributor/agent engineering instructions, branch
   coverage reports and a 90% combined coverage gate in CI across Python 3.12–3.14.
 - Repository PR template, Voxello-specific PR creation guidance and an issue/PR label catalog.
+- Repository PR review triage skill with Voxello's TDD/checks, a bounded opt-in autofix loop and
+  a `status:to-approve` label for the human approval handoff.
 - `language` parameter (ISO 639-1, e.g. `it`, `en`) on the `speak` and `notify` MCP tools, on
   `VoxelloService.speak`/`notify` and on the CLI (`speak`, `notify`, `cache warm`, all with
   `--language/-l`). The value is validated (`^[a-z]{2}$`, case-insensitive, new error code

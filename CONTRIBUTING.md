@@ -114,3 +114,8 @@ with the first decision.
 The [PR creation guide](docs/skills/pr-create.md) documents the `gh` workflow, label selection and
 post-creation verification. The repository's [Claude skill](.claude/skills/pr-create/SKILL.md)
 delegates to that shared guide.
+
+The [PR review triage guide](docs/skills/pr-review-triage.md) covers verifying and responding to
+existing feedback, regression fixes and the opt-in bounded autofix loop. The repository's
+[triage skill](.claude/skills/pr-review-triage/SKILL.md) delegates to it; `status:to-approve` marks a
+completed review cycle waiting for human approval.
