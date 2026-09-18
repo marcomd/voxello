@@ -131,3 +131,15 @@ def test_invalid_yaml_shape(tmp_path: Path):
     cfg.write_text("- just\n- a list\n")
     with pytest.raises(ValueError):
         load_settings(cfg)
+
+
+def test_provider_retry_settings_defaults_and_bounds():
+    vs = Settings().tts.voicestudio
+    assert (vs.connect_timeout_seconds, vs.retries, vs.retry_backoff_seconds) == (5, 1, 0.5)
+    assert Settings(tts={"voicestudio": {"retries": 0}}).tts.voicestudio.retries == 0
+    with pytest.raises(ValidationError, match="retries"):
+        Settings(tts={"voicestudio": {"retries": 6}})
+    with pytest.raises(ValidationError, match="connect_timeout_seconds"):
+        Settings(tts={"voicestudio": {"connect_timeout_seconds": 0}})
+    with pytest.raises(ValidationError, match="retry_backoff_seconds"):
+        Settings(tts={"voicestudio": {"retry_backoff_seconds": -1}})

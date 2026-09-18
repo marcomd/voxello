@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -50,7 +51,8 @@ def test_install_skill_and_hook(claude_dir: Path):
     assert hook.path.read_bytes() == install.asset_bytes(
         "claude", "hooks", "voxello-notification-hook.sh"
     )
-    assert hook.path.stat().st_mode & stat.S_IXUSR
+    if sys.platform != "win32":  # no POSIX exec bit on Windows
+        assert hook.path.stat().st_mode & stat.S_IXUSR
 
     assert install.install_skill(claude_dir).status == "unchanged"
     hook.path.write_text("#!/bin/sh\necho old\n")

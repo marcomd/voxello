@@ -18,6 +18,7 @@ from voxello.notifications.desktop import DesktopNotifier, detect_notifier_comma
         ("linux", {"notify-send"}, "notify-send"),
         ("linux", set(), None),
         ("win32", {"powershell"}, "powershell"),
+        ("win32", {"pwsh"}, None),  # the WinRT toast needs Windows PowerShell 5.1
         ("win32", set(), None),
         ("unknown", {"notify-send"}, None),
     ],

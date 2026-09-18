@@ -14,6 +14,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -102,7 +103,12 @@ def test_message_files_have_the_same_keys():
 
 # -- the bash script ----------------------------------------------------------------------
 
-bash_only = pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
+# On Windows the runner's Git Bash cannot exec the fake `voxello` scripts these tests create,
+# so the script is only checked on POSIX; docs/windows-testing.md covers the hook by hand.
+bash_only = pytest.mark.skipif(
+    shutil.which("bash") is None or sys.platform == "win32",
+    reason="bash not available or Windows (hook verified manually)",
+)
 
 
 def _fake_command(bin_dir: Path, name: str, log: Path) -> None:

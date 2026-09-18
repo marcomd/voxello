@@ -7,10 +7,18 @@ never parse a 200 as JSON and always sniff the WAV header, because an unavailabl
 encoder can fall back to WAV. Discovery endpoints differ between the two servers, so
 listing voices and engines tries VoiceStudio's paths first and falls back to the
 omnivoice-server ones. See ``docs/voicestudio-api.md``.
+
+Retry policy (roadmap milestone 4): a synthesis request is retried ``retries`` times, with
+exponential backoff starting at ``retry_backoff_seconds``, when the connection fails
+(connect error or connect timeout, connection dropped) or the server answers HTTP 502/503/504
+(typical while the model is still loading). A 4xx is the caller's problem and is never
+retried. A read timeout is not retried either: the server accepted the request and is just
+slow, and a second attempt would double the time the service holds its synthesis lock.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -35,6 +43,10 @@ VOICES_PATHS = ("/v1/audio/voices", "/v1/voices")  # VoiceStudio, then omnivoice
 ENGINES_PATHS = ("/engines/tts", "/v1/models")
 DEFAULT_VOICE_LABEL = "server-default"
 MAX_INPUT_CHARS = 4096  # hard limit of the VoiceStudio SpeechRequest schema
+RETRIABLE_STATUSES = frozenset({502, 503, 504})
+# Connection-phase failures. ``NetworkError`` covers ConnectError, ReadError, WriteError and
+# CloseError; ``ConnectTimeout`` is the only ``TimeoutException`` worth a second attempt.
+RETRIABLE_EXCEPTIONS: tuple[type[Exception], ...] = (httpx2.NetworkError, httpx2.ConnectTimeout)
 
 
 class VoiceStudioProvider:
@@ -49,7 +61,9 @@ class VoiceStudioProvider:
             headers["Authorization"] = f"Bearer {settings.api_key.get_secret_value()}"
         self._client = httpx2.AsyncClient(
             base_url=settings.base_url,
-            timeout=httpx2.Timeout(settings.timeout_seconds, connect=5.0),
+            timeout=httpx2.Timeout(
+                settings.timeout_seconds, connect=settings.connect_timeout_seconds
+            ),
             headers=headers,
             transport=transport,
         )
@@ -85,17 +99,9 @@ class VoiceStudioProvider:
                 TTS_PROVIDER_ERROR, f"VoiceStudio accepts at most {MAX_INPUT_CHARS} characters."
             )
         payload = self._payload(text, voice, language)
-        try:
-            response = await self._client.post(SPEECH_PATH, json=payload)
-        except (httpx2.ConnectError, httpx2.TimeoutException, httpx2.NetworkError) as exc:
-            raise self._unavailable(exc) from exc
-        except httpx2.HTTPError as exc:
-            raise VoxelloError(TTS_PROVIDER_ERROR, f"VoiceStudio request failed: {exc}") from exc
+        response = await self._post_speech(payload)
 
         voice_label = payload.get("voice", DEFAULT_VOICE_LABEL)
-        if response.status_code != 200:
-            raise self._status_error(response, payload.get("voice"))
-
         content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
         body = response.content
         if not body:
@@ -111,6 +117,48 @@ class VoiceStudioProvider:
             TTS_PROVIDER_ERROR,
             f"VoiceStudio returned an unexpected response ({content_type or 'no content type'}).",
         )
+
+    async def _post_speech(self, payload: dict[str, Any]) -> httpx2.Response:
+        """POST the synthesis request, retrying only what the module docstring allows.
+
+        Returns the 200 response; any other outcome is raised as a ``VoxelloError`` whose
+        ``details["attempts"]`` says how many requests were made.
+        """
+        attempts = self.settings.retries + 1
+        for attempt in range(1, attempts + 1):
+            error: VoxelloError
+            reason: str
+            try:
+                response = await self._client.post(SPEECH_PATH, json=payload)
+            except RETRIABLE_EXCEPTIONS as exc:
+                error, reason = self._unavailable(exc), type(exc).__name__
+            except httpx2.TimeoutException as exc:
+                error = self._unavailable(exc)
+                error.details["attempts"] = attempt
+                raise error from exc
+            except httpx2.HTTPError as exc:
+                raise VoxelloError(
+                    TTS_PROVIDER_ERROR,
+                    f"VoiceStudio request failed: {exc}",
+                    details={"attempts": attempt},
+                ) from exc
+            else:
+                if response.status_code == 200:
+                    return response
+                error = self._status_error(response, payload.get("voice"))
+                error.details["attempts"] = attempt
+                if response.status_code not in RETRIABLE_STATUSES:
+                    raise error
+                reason = f"HTTP {response.status_code}"
+            if attempt == attempts:
+                error.details["attempts"] = attempt
+                raise error
+            delay = self.settings.retry_backoff_seconds * 2 ** (attempt - 1)
+            log.warning(
+                "TTS attempt %d/%d failed (%s); retrying in %.1fs", attempt, attempts, reason, delay
+            )
+            await asyncio.sleep(delay)
+        raise AssertionError("unreachable")  # pragma: no cover
 
     async def list_voices(self) -> list[VoiceInfo]:
         data = await self._get_json_first(VOICES_PATHS)

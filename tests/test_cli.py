@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 
 from voxello import __version__
-from voxello.cli import describe_installation, main
-from voxello.config import describe_config_path
+from voxello.cli import cmd_doctor, describe_installation, main
+from voxello.config import Settings, describe_config_path
+from voxello.errors import INVALID_LANGUAGE, TTS_PROVIDER_ERROR, VoxelloError
+from voxello.tts.base import VoiceInfo
+
+from .conftest import FakeProvider
 
 
 def test_version_flag(capsys: pytest.CaptureFixture[str]):
@@ -275,4 +280,129 @@ def test_speak_and_notify_accept_language(isolated_env: Path, fake_service, caps
     capsys.readouterr()
     assert fake_service.calls[-1] == ("Done", None, "en")
     assert main(["speak", "x", "--no-play", "-l", "nope"]) == 1
+    assert "invalid_language" in capsys.readouterr().err
+
+
+# -- doctor against a healthy (fake) server ------------------------------------------------------
+
+
+@pytest.fixture
+def doctor_provider(monkeypatch: pytest.MonkeyPatch) -> FakeProvider:
+    # CI runners (Linux especially) have no audio player; doctor must not fail for that here.
+    monkeypatch.setattr("shutil.which", lambda name: f"/usr/bin/{name}")
+    provider = FakeProvider()
+    provider.voices = [
+        VoiceInfo("marco", "Marco", "it"),
+        VoiceInfo("giulia", "Giulia", "it"),
+        VoiceInfo("alice", "Alice", "en"),
+        VoiceInfo("robot", None, None),
+    ]
+    return provider
+
+
+@pytest.fixture
+def doctor_settings(tmp_path: Path) -> Settings:
+    return Settings(
+        storage={"temp_dir": tmp_path / "tmp"},
+        cache={"directory": tmp_path / "cache"},
+        output={"directory": tmp_path / "out"},
+        speech={"voices_by_language": {"it": "marco", "en": "nope"}},
+        tts={"voicestudio": {"voice": "robot"}},
+    )
+
+
+async def test_doctor_groups_voices_by_language_and_checks_configured_ones(
+    doctor_settings: Settings, doctor_provider: FakeProvider, capsys: pytest.CaptureFixture[str]
+):
+    await cmd_doctor(doctor_settings, None, provider=doctor_provider)
+    out = capsys.readouterr().out
+    assert "  health: ok (version test)" in out
+    assert "  engines: omnivoice" in out
+    lines = out.splitlines()
+    start = lines.index("  voices: 4 available")
+    assert lines[start + 1 : start + 4] == [
+        "    en: alice",
+        "    it: marco, giulia",
+        "    unspecified: robot",
+    ]
+    assert "    voices_by_language[en]=nope: WARNING not in the server's voice list" in lines
+    assert "    voices_by_language[it]=marco: found" in lines
+    assert "    voice=robot: found" in lines
+    assert "synthesis:" not in out, "no sample phrase without --synth"
+    assert doctor_provider.calls == []
+
+
+async def test_doctor_keeps_flat_voice_list_when_server_reports_no_languages(
+    doctor_settings: Settings, doctor_provider: FakeProvider, capsys: pytest.CaptureFixture[str]
+):
+    doctor_provider.voices = [VoiceInfo(f"v{i}") for i in range(20)]
+    await cmd_doctor(doctor_settings, None, provider=doctor_provider)
+    out = capsys.readouterr().out
+    assert "  voices: 20 available: v0, v1," in out and ", +4 more" in out
+    assert "    voices_by_language[it]=marco: WARNING" in out
+
+
+async def test_doctor_caps_long_language_groups(
+    doctor_settings: Settings, doctor_provider: FakeProvider, capsys: pytest.CaptureFixture[str]
+):
+    doctor_provider.voices = [VoiceInfo(f"v{i}", None, "it") for i in range(10)]
+    await cmd_doctor(doctor_settings, None, provider=doctor_provider)
+    assert "    it: v0, v1, v2, v3, v4, v5, v6, v7 (+2 more)" in capsys.readouterr().out
+
+
+async def test_doctor_synth_reports_latency_with_the_resolved_voice(
+    doctor_settings: Settings, doctor_provider: FakeProvider, capsys: pytest.CaptureFixture[str]
+):
+    code = await cmd_doctor(doctor_settings, None, synth=True, provider=doctor_provider)
+    out = capsys.readouterr().out
+    assert code == 0
+    assert re.search(
+        r"^  synthesis: ok in \d+\.\d\d s \(voice=marco, language=it, \d+ KB, 0\.5 s of audio\)$",
+        out,
+        re.M,
+    ), out
+    assert doctor_provider.calls == [("Voxello è pronto.", "marco", "it")]
+    assert "Result: OK" in out
+
+
+async def test_doctor_synth_uses_the_requested_language(
+    doctor_settings: Settings, doctor_provider: FakeProvider, capsys: pytest.CaptureFixture[str]
+):
+    await cmd_doctor(doctor_settings, None, synth=True, language=" EN ", provider=doctor_provider)
+    assert doctor_provider.calls == [("Voxello is ready.", "nope", "en")]
+    assert "language=en" in capsys.readouterr().out
+    await cmd_doctor(doctor_settings, None, synth=True, language="de", provider=doctor_provider)
+    assert doctor_provider.calls[-1] == ("Voxello is ready.", "robot", "de"), "English fallback"
+
+
+async def test_doctor_synth_failure_is_a_problem(
+    doctor_settings: Settings, doctor_provider: FakeProvider, capsys: pytest.CaptureFixture[str]
+):
+    doctor_provider.fail_with = VoxelloError(TTS_PROVIDER_ERROR, "engine crashed")
+    code = await cmd_doctor(doctor_settings, None, synth=True, provider=doctor_provider)
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "  synthesis: ERROR - tts_provider_error: engine crashed" in out
+    assert "PROBLEMS FOUND" in out
+
+
+async def test_doctor_rejects_invalid_language(doctor_settings: Settings, doctor_provider):
+    with pytest.raises(VoxelloError) as exc:
+        await cmd_doctor(doctor_settings, None, language="xx1", provider=doctor_provider)
+    assert exc.value.code == INVALID_LANGUAGE
+
+
+def test_doctor_flags_are_wired_through_main(
+    isolated_env: Path,
+    doctor_provider: FakeProvider,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    import voxello.tts.voicestudio as voicestudio
+
+    monkeypatch.setattr(voicestudio, "VoiceStudioProvider", lambda _settings: doctor_provider)
+    assert main(["doctor", "--synth", "-l", "en"]) == 0
+    assert doctor_provider.calls == [("Voxello is ready.", None, "en")]
+    assert "synthesis: ok" in capsys.readouterr().out
+    assert main(["doctor", "-l", "italiano"]) == 1
     assert "invalid_language" in capsys.readouterr().err
