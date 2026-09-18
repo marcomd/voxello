@@ -45,10 +45,14 @@ dev = [
   "pytest-asyncio>=1.4",
   "ruff>=0.16",
   "pyright>=1.1",
+  "pytest-cov>=6",
 ]
 
 [tool.hatch.version]
 path = "src/voxello/__init__.py"
+
+[tool.hatch.build]
+exclude = ["/docs/engineering-review.md"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/voxello"]
@@ -61,6 +65,8 @@ include = [
   "README.md",
   "LICENSE",
   "CLAUDE.md",
+  "AGENTS.md",
+  "CONTRIBUTING.md",
   "CHANGELOG.md",
   "config.example.yaml",
 ]
@@ -69,7 +75,18 @@ include = [
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = ["integration: requires a running VoiceStudio or real audio hardware"]
-addopts = "-m 'not integration'"
+addopts = "-m 'not integration' --strict-markers --strict-config"
+
+[tool.coverage.run]
+branch = true
+source = ["voxello"]
+relative_files = true
+
+[tool.coverage.report]
+fail_under = 90
+precision = 2
+show_missing = true
+skip_empty = true
 
 [tool.ruff]
 line-length = 100

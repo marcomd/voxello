@@ -90,7 +90,17 @@ class DesktopNotifier:
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
             )
-            _, stderr = await asyncio.wait_for(process.communicate(), timeout=15.0)
+            try:
+                _, stderr = await asyncio.wait_for(process.communicate(), timeout=15.0)
+            except (TimeoutError, asyncio.CancelledError):
+                # Cancelling communicate() does not stop the child process. Drain stderr
+                # after killing it so a full pipe cannot block process cleanup.
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                await process.communicate()
+                raise
         except (OSError, TimeoutError) as exc:
             raise VoxelloError(
                 NOTIFICATION_UNAVAILABLE, f"Desktop notification failed ({type(exc).__name__})."

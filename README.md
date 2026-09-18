@@ -297,13 +297,22 @@ back as tool errors with a stable code: `tts_provider_unavailable`, `tts_provide
 
 ## Development
 
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) for TDD, Python conventions and review practices.
+[AGENTS.md](AGENTS.md) shares the rules with coding agents.
+
 ```bash
-uv sync --all-groups
+uv sync --locked --all-groups
 uv run pytest                      # unit tests (fake provider and player)
+uv run pytest --cov --cov-report=term-missing --cov-report=html --cov-report=xml  # combined line/branch floor: 90%
 uv run pytest -m integration tests/integration   # real afplay; real VoiceStudio if VOXELLO_VOICESTUDIO_URL is set
 uv run ruff check src tests && uv run ruff format --check src tests
 uv run pyright src
+uv build                           # verify packaging when changing package configuration/assets
 ```
+
+Open `htmlcov/index.html` to inspect uncovered lines and branches. Coverage reports are local
+artifacts and are not committed. For a focused test during development, pass its path or `-k`
+filter to `uv run pytest` without `--cov` so the whole-project coverage threshold does not apply.
 
 Docs: `docs/TUTORIAL.md` (setting up an omnivoice-server host on Windows/NVIDIA or Apple Silicon),
 `docs/voxello-specification.md` (the specification), `docs/voicestudio-api.md` (VoiceStudio HTTP
@@ -325,7 +334,12 @@ wheel, smoke-tests the wheel, creates a GitHub release with the files and publis
 [trusted publishing](https://docs.pypi.org/trusted-publishers/). One-time setup on pypi.org: add a
 GitHub publisher for project `voxello` with owner `marcomd`, repository `voxello`, workflow
 `release.yml`, environment `pypi`, and create the `pypi` environment in the GitHub repository
-settings. `ci.yml` runs ruff, pyright and pytest on macOS and Linux for every push and pull request.
+settings. `ci.yml` runs ruff, pyright and pytest with coverage on macOS and Linux with Python
+3.12–3.14 for pushes to `main` and pull requests; it also supports manual runs from the Actions
+tab once the workflow is on the default branch. Each job uses the lockfile, enforces the coverage
+threshold and builds the package. Tests requiring real audio hardware or a live TTS server are
+excluded from CI. Coverage reports are uploaded as workflow artifacts and retained for 14 days.
+Superseded runs are cancelled, and each job has a 15-minute timeout.
 
 ## Licensing
 

@@ -37,7 +37,8 @@ project_name: "voxello"
 # When using multiple language servers, the first language server that supports a given file will be used for that file.
 # The first language server is the default language and the respective language server will be used as a fallback.
 # Note that when using the JetBrains backend, language servers are not used and this list is correspondingly ignored.
-language_servers: [python]
+language_servers:
+- python
 
 # the encoding used by text files in the project
 # For a list of possible encodings, see https://docs.python.org/3.11/library/codecs.html#standard-encodings
@@ -168,3 +169,17 @@ read_only_memory_patterns: []
 # Extends the list from the global configuration, merging the two lists.
 # Example: ["_archive/.*", "_episodes/.*"]
 ignored_memory_patterns: []
+
+# list of APIs (facades or facade methods, e.g. "lsp" or "lsp.get_diagnostics_for_symbol") to include in the REPL
+# that would otherwise be disabled (particularly optional methods, which are disabled by default).
+# This extends the existing inclusions (e.g. from the global configuration).
+included_apis: []
+
+# list of APIs (facades or facade methods, e.g. "lsp" or "lsp.find_symbol") to exclude from the REPL.
+# This extends the existing exclusions (e.g. from the global configuration).
+excluded_apis: []
+
+# The interface through which the agent (LLM) accesses Serena's functionality (overrides the global setting).
+# Valid values: tools, REPL (see the global configuration for details); leave empty to use the global setting.
+# Note: the interface is fixed at startup. If a project is activated post-init, its setting is not applied.
+agent_interface:

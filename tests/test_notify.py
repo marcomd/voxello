@@ -5,6 +5,7 @@ import pytest
 from voxello.errors import (
     INVALID_PARAMETER,
     NOTIFICATION_UNAVAILABLE,
+    STORAGE_ERROR,
     TTS_PROVIDER_UNAVAILABLE,
     VoxelloError,
 )
@@ -69,3 +70,42 @@ async def test_notify_rejects_unknown_channel(service):
     with pytest.raises(VoxelloError) as exc:
         await service.notify("ciao", channels=["pager"])
     assert exc.value.code == INVALID_PARAMETER
+
+
+@pytest.mark.parametrize("channel", ["voice", "desktop"])
+async def test_disabled_channel_skips_delivery(service, provider, notifier, channel):
+    setattr(service.settings.notifications, channel, False)
+    result = await service.notify("disabled", channels=[channel])
+    assert result.channels == {channel: "disabled"}
+    assert provider.calls == []
+    assert notifier.sent == []
+
+
+@pytest.mark.parametrize("missing", [True, False])
+async def test_unavailable_desktop_is_reported(service, notifier, missing):
+    if missing:
+        service.notifier = None
+    else:
+        notifier._available = False
+    result = await service.notify("hello", channels=["desktop"])
+    assert result.status == "failed"
+    assert result.channels == {"desktop": "unavailable"}
+
+
+async def test_file_failure_preserves_successful_voice_delivery(service, monkeypatch):
+    def fail(*args):
+        raise VoxelloError(STORAGE_ERROR, "disk full")
+
+    monkeypatch.setattr(service.output_store, "save_text", fail)
+    result = await service.notify("hello", channels=["voice", "file"])
+    assert result.status == "partial"
+    assert result.channels == {"voice": "playing", "file": "error:storage_error"}
+    assert result.saved_path is not None
+
+
+async def test_file_provider_failure_does_not_block_desktop(service, provider, notifier):
+    provider.fail_with = VoxelloError(TTS_PROVIDER_UNAVAILABLE, "down")
+    result = await service.notify("hello", channels=["file", "desktop"])
+    assert result.status == "partial"
+    assert result.channels == {"file": "error:tts_provider_unavailable", "desktop": "sent"}
+    assert notifier.sent == [("Voxello", "hello")]
