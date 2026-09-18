@@ -287,7 +287,9 @@ def test_speak_and_notify_accept_language(isolated_env: Path, fake_service, caps
 
 
 @pytest.fixture
-def doctor_provider() -> FakeProvider:
+def doctor_provider(monkeypatch: pytest.MonkeyPatch) -> FakeProvider:
+    # CI runners (Linux especially) have no audio player; doctor must not fail for that here.
+    monkeypatch.setattr("shutil.which", lambda name: f"/usr/bin/{name}")
     provider = FakeProvider()
     provider.voices = [
         VoiceInfo("marco", "Marco", "it"),
