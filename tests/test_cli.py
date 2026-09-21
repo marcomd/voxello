@@ -342,6 +342,19 @@ async def test_doctor_keeps_flat_voice_list_when_server_reports_no_languages(
     assert "    voices_by_language[it]=marco: WARNING" in out
 
 
+async def test_doctor_checks_configured_voices_when_server_lists_none(
+    doctor_settings: Settings, doctor_provider: FakeProvider, capsys: pytest.CaptureFixture[str]
+):
+    # A healthy server with an empty voice list: every configured id is absent, say so.
+    doctor_provider.voices = []
+    await cmd_doctor(doctor_settings, None, provider=doctor_provider)
+    lines = capsys.readouterr().out.splitlines()
+    assert "  voices: 0 available" in lines
+    assert "    voices_by_language[en]=nope: WARNING not in the server's voice list" in lines
+    assert "    voices_by_language[it]=marco: WARNING not in the server's voice list" in lines
+    assert "    voice=robot: WARNING not in the server's voice list" in lines
+
+
 async def test_doctor_caps_long_language_groups(
     doctor_settings: Settings, doctor_provider: FakeProvider, capsys: pytest.CaptureFixture[str]
 ):

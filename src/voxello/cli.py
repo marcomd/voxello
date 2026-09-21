@@ -348,17 +348,17 @@ def describe_voices(voices: list[VoiceInfo], settings: Settings) -> list[str]:
             shown = ", ".join(ids[:VOICES_PER_LINE])
             more = f" (+{len(ids) - VOICES_PER_LINE} more)" if len(ids) > VOICES_PER_LINE else ""
             lines.append(f"    {lang}: {shown}{more}")
-    if voices:
-        known = {v.id for v in voices}
-        configured = [
-            (f"voices_by_language[{lang}]", voice)
-            for lang, voice in sorted(settings.speech.voices_by_language.items())
-        ]
-        if settings.tts.voicestudio.voice:
-            configured.append(("voice", settings.tts.voicestudio.voice))
-        for label, voice in configured:
-            verdict = "found" if voice in known else "WARNING not in the server's voice list"
-            lines.append(f"    {label}={voice}: {verdict}")
+    # Also when the list is empty: every configured id is then absent, which is worth a warning.
+    known = {v.id for v in voices}
+    configured = [
+        (f"voices_by_language[{lang}]", voice)
+        for lang, voice in sorted(settings.speech.voices_by_language.items())
+    ]
+    if settings.tts.voicestudio.voice:
+        configured.append(("voice", settings.tts.voicestudio.voice))
+    for label, voice in configured:
+        verdict = "found" if voice in known else "WARNING not in the server's voice list"
+        lines.append(f"    {label}={voice}: {verdict}")
     return lines
 
 

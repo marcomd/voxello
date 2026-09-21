@@ -12,8 +12,11 @@ on:
 permissions:
   contents: read
 
+# A fixed `ci-` prefix, not `github.workflow`: inside a `workflow_call` that expression is the
+# caller's name ("Release"), which would collide with release.yml's own `release-<ref>` group
+# (group names are case-insensitive) and `cancel-in-progress` would cancel the release run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
