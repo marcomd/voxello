@@ -14,6 +14,7 @@ import logging
 import os
 import shutil
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from voxello.config import (
 )
 from voxello.errors import INVALID_PARAMETER, VoxelloError
 from voxello.logging_setup import configure_logging
+from voxello.tts.base import TTSProvider, VoiceInfo
 
 log = logging.getLogger(__name__)
 
@@ -41,7 +43,25 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("serve", help="Run the MCP server over stdio (default)")
-    sub.add_parser("doctor", help="Check configuration, VoiceStudio, player and notifier")
+    doctor = sub.add_parser(
+        "doctor",
+        help="Check configuration, TTS server, voices, player and notifier",
+        description="Check the setup. Configured voices missing from the server's voice list "
+        "are reported as warnings, not failures: omnivoice-server accepts ids its list may "
+        "not expose. Exit status 1 when the server is unhealthy, no player is found or "
+        "--synth fails.",
+    )
+    doctor.add_argument(
+        "--synth",
+        action="store_true",
+        help="Synthesize a short sample phrase and report the latency (talks to the TTS server)",
+    )
+    doctor.add_argument(
+        "--language",
+        "-l",
+        default=None,
+        help="Language of the sample phrase (default: speech.default_language)",
+    )
 
     speak = sub.add_parser("speak", help="Synthesize and play text without an agent")
     speak.add_argument("text", help="Text to speak")
@@ -193,7 +213,9 @@ def main(argv: list[str] | None = None) -> int:
         if command == "serve":
             return cmd_serve(_load(args))
         if command == "doctor":
-            return asyncio.run(cmd_doctor(_load(args), args.config))
+            return asyncio.run(
+                cmd_doctor(_load(args), args.config, synth=args.synth, language=args.language)
+            )
         if command == "speak":
             return asyncio.run(cmd_speak(_load(args), args))
         if command == "notify":
@@ -224,12 +246,25 @@ def cmd_serve(settings: Settings) -> int:
     return 0
 
 
-async def cmd_doctor(settings: Settings, config_path: Path | None) -> int:
-    from voxello.core.service import VoxelloService
+SAMPLE_PHRASES = {"it": "Voxello è pronto.", "en": "Voxello is ready."}
+VOICES_PER_LINE = 8
+
+
+async def cmd_doctor(
+    settings: Settings,
+    config_path: Path | None,
+    *,
+    synth: bool = False,
+    language: str | None = None,
+    provider: TTSProvider | None = None,
+) -> int:
+    """Print the setup report; ``provider`` is injected by tests, otherwise VoiceStudio."""
+    from voxello.core.service import VoxelloService, normalize_language
     from voxello.notifications.desktop import detect_notifier_command
     from voxello.playback.detect import detect_backend
     from voxello.tts.voicestudio import VoiceStudioProvider
 
+    language = normalize_language(language, settings.speech.default_language)
     path, source = describe_config_path(config_path)
     ok = True
     print(f"Voxello {__version__}")
@@ -246,7 +281,8 @@ async def cmd_doctor(settings: Settings, config_path: Path | None) -> int:
     for line in describe_speech(settings):
         print(line)
 
-    provider = VoiceStudioProvider(vs)
+    if provider is None:
+        provider = VoiceStudioProvider(vs)
     try:
         health = await provider.health()
         if health.status == "ok":
@@ -261,14 +297,13 @@ async def cmd_doctor(settings: Settings, config_path: Path | None) -> int:
                 print(f"  engines: could not list ({exc.code})")
             try:
                 voices = await provider.list_voices()
-                ids = [v.id for v in voices[:16]]
-                more = f", +{len(voices) - len(ids)} more" if len(voices) > len(ids) else ""
-                print(
-                    f"  voices: {len(voices)} available"
-                    + (f": {', '.join(ids)}{more}" if ids else "")
-                )
             except VoxelloError as exc:
                 print(f"  voices: could not list ({exc.code})")
+            else:
+                for line in describe_voices(voices, settings):
+                    print(line)
+            if synth:
+                ok = await _doctor_synth(provider, settings, language) and ok
         else:
             ok = False
             print(f"  health: ERROR - {health.detail}")
@@ -291,6 +326,64 @@ async def cmd_doctor(settings: Settings, config_path: Path | None) -> int:
     del VoxelloService  # imported only to fail fast on broken installs
     print("Result:", "OK" if ok else "PROBLEMS FOUND")
     return 0 if ok else 1
+
+
+def describe_voices(voices: list[VoiceInfo], settings: Settings) -> list[str]:
+    """``doctor`` lines for the server's voices, grouped by language when the server says it,
+    followed by one check per configured voice (roadmap milestone 4)."""
+    lines: list[str] = []
+    if not any(v.language for v in voices):
+        ids = [v.id for v in voices[:16]]
+        more = f", +{len(voices) - len(ids)} more" if len(voices) > len(ids) else ""
+        lines.append(
+            f"  voices: {len(voices)} available" + (f": {', '.join(ids)}{more}" if ids else "")
+        )
+    else:
+        lines.append(f"  voices: {len(voices)} available")
+        groups: dict[str, list[str]] = {}
+        for v in voices:
+            groups.setdefault(v.language or "unspecified", []).append(v.id)
+        for lang in sorted(groups, key=lambda k: (k == "unspecified", k)):
+            ids = groups[lang]
+            shown = ", ".join(ids[:VOICES_PER_LINE])
+            more = f" (+{len(ids) - VOICES_PER_LINE} more)" if len(ids) > VOICES_PER_LINE else ""
+            lines.append(f"    {lang}: {shown}{more}")
+    # Also when the list is empty: every configured id is then absent, which is worth a warning.
+    known = {v.id for v in voices}
+    configured = [
+        (f"voices_by_language[{lang}]", voice)
+        for lang, voice in sorted(settings.speech.voices_by_language.items())
+    ]
+    if settings.tts.voicestudio.voice:
+        configured.append(("voice", settings.tts.voicestudio.voice))
+    for label, voice in configured:
+        verdict = "found" if voice in known else "WARNING not in the server's voice list"
+        lines.append(f"    {label}={voice}: {verdict}")
+    return lines
+
+
+async def _doctor_synth(provider: TTSProvider, settings: Settings, language: str) -> bool:
+    """Synthesize a sample phrase with the voice a request in ``language`` would get and
+    print the latency. Nothing is played, cached or kept."""
+    from voxello.core.service import resolve_voice
+    from voxello.storage.wav import wav_duration_ms
+
+    text = SAMPLE_PHRASES.get(language, SAMPLE_PHRASES["en"])
+    voice = resolve_voice(settings, None, language)
+    started = time.perf_counter()
+    try:
+        result = await provider.synthesize(text, voice, language)
+    except VoxelloError as exc:
+        print(f"  synthesis: ERROR - {exc.code}: {exc.message}")
+        return False
+    elapsed = time.perf_counter() - started
+    duration = wav_duration_ms(result.audio)
+    audio = f", {duration / 1000:.1f} s of audio" if duration is not None else ""
+    print(
+        f"  synthesis: ok in {elapsed:.2f} s (voice={result.voice}, language={language}, "
+        f"{_human_size(len(result.audio))}{audio})"
+    )
+    return True
 
 
 def describe_speech(settings: Settings) -> list[str]:

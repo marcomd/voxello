@@ -31,7 +31,7 @@ def _duration(wf: wave.Wave_read) -> int | None:
 
 
 def write_silence(path: Path, duration_ms: int, sample_rate: int = 24000) -> Path:
-    """Write a silent mono 16-bit WAV file (used by tests and `doctor`)."""
+    """Write a silent mono 16-bit WAV file (used by the tests)."""
     frames = int(sample_rate * duration_ms / 1000)
     with wave.open(str(path), "wb") as wf:
         wf.setnchannels(1)

@@ -19,6 +19,8 @@ from voxello.playback.subprocess_player import SubprocessHandle, SubprocessPlaye
         ("linux", {"mpv", "paplay"}, "mpv"),
         ("linux", {"aplay"}, "aplay"),
         ("win32", {"powershell", "mpv"}, "powershell"),
+        ("win32", {"powershell", "pwsh"}, "powershell"),
+        ("win32", {"pwsh", "mpv"}, "pwsh"),
         ("unknown", {"ffplay"}, "ffplay"),
         ("linux", set(), None),
     ],
@@ -60,10 +62,14 @@ async def test_player_passes_path_as_single_argument(name, volume_args, monkeypa
     assert await handle.wait() == 0
 
 
-def test_powershell_path_escapes_single_quotes():
-    command = ALL_BACKENDS["powershell"].build_command(Path("it's audio.wav"), 0.5)
-    assert command[:4] == ["powershell", "-NoProfile", "-NonInteractive", "-Command"]
+@pytest.mark.parametrize("host", ["powershell", "pwsh"])
+def test_powershell_path_escapes_single_quotes(host):
+    backend = ALL_BACKENDS[host]
+    assert backend.supports_volume is False, "SoundPlayer has no volume control"
+    command = backend.build_command(Path("it's audio.wav"), 0.5)
+    assert command[:4] == [host, "-NoProfile", "-NonInteractive", "-Command"]
     assert "'it''s audio.wav'" in command[-1]
+    assert "0.5" not in command[-1]
 
 
 @pytest.mark.parametrize("failure", [OSError, ValueError])

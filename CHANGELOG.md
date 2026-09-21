@@ -7,10 +7,28 @@ change the MCP tool signatures or the configuration layout.
 
 ## [Unreleased]
 
-Per-request language selection (roadmap milestone 3).
+Per-request language selection (roadmap milestone 3) and quality and robustness work (roadmap
+milestone 4).
 
 ### Added
 
+- `tts.voicestudio.connect_timeout_seconds` (5), `retries` (1) and `retry_backoff_seconds` (0.5):
+  a synthesis request that fails to connect or gets HTTP 502/503/504 is retried with exponential
+  backoff; 4xx answers and read timeouts are never retried. The `tts_provider_*` errors report
+  `attempts` in their details.
+- `voxello doctor` groups the server's voices by language, checks that every configured
+  `voice`/`voices_by_language` id is in the server's list (a warning, not a failure) and, with
+  `--synth [--language XX]`, synthesizes a sample phrase and prints the latency, size and
+  duration of the audio. `list_engines` joined the `TTSProvider` protocol.
+- `pwsh` (PowerShell 7) as a Windows playback fallback after `powershell`; toasts still need
+  Windows PowerShell 5.1.
+- `docs/windows-testing.md`: manual checklist to verify Windows playback, toasts, interrupt and
+  the hook on real hardware, with a results table.
+- CI runs the unit suite on Windows (Python 3.12, fakes only, no coverage floor) besides the
+  Linux and macOS matrix; the release workflow runs the whole CI matrix on the tagged commit
+  before building or publishing anything.
+- MCP-level end-to-end tests for `notify` (`partial`, `failed`, file channel) and for the
+  synthesis lock (a cache hit never waits for a slow synthesis).
 - Shared contributor/agent engineering instructions, branch
   coverage reports and a 90% combined coverage gate in CI across Python 3.12–3.14.
 - Repository PR template, Voxello-specific PR creation guidance and an issue/PR label catalog.

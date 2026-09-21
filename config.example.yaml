@@ -9,7 +9,10 @@ tts:
     # api_key: "change-me"              # required when VoiceStudio is on another host
     # voice: alloy                      # omit for the server default; VoiceStudio: profile id
     engine: omnivoice                   # VoiceStudio: voxcpm2, cosyvoice, mlx-audio, kittentts, ...
-    timeout_seconds: 120
+    timeout_seconds: 120                # read timeout of one synthesis request
+    connect_timeout_seconds: 5
+    retries: 1                          # retry once on connection errors and HTTP 502/503/504
+    retry_backoff_seconds: 0.5          # doubled at every further retry
 
 speech:
   default_language: it                  # ISO 639-1; agents pass `language` per request

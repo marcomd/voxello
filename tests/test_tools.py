@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import anyio
 import pytest
@@ -13,7 +14,7 @@ from mcp.shared.memory import create_client_server_memory_streams
 from mcp.types import CallToolResult, TextContent
 
 from voxello.core.service import VoxelloService
-from voxello.errors import TTS_PROVIDER_UNAVAILABLE, VoxelloError
+from voxello.errors import NOTIFICATION_UNAVAILABLE, TTS_PROVIDER_UNAVAILABLE, VoxelloError
 from voxello.mcp.server import create_server
 from voxello.storage.files import OutputStore, TempStore
 
@@ -74,6 +75,7 @@ async def test_tools_are_listed_with_annotations(settings, stack):
         assert "cached" in tools["speak"].output_schema["properties"]
         assert "language" in tools["speak"].output_schema["properties"]
         assert "cache_hits" in tools["get_status"].output_schema["properties"]
+        assert "saved_path" in tools["notify"].output_schema["properties"]
 
 
 async def test_speak_status_stop_round_trip(settings, stack):
@@ -122,6 +124,59 @@ async def test_notify_round_trip(settings, stack):
         assert result.structured_content["status"] == "delivered"
         assert result.structured_content["channels"] == {"voice": "playing", "desktop": "sent"}
         assert notifier.sent == [("Voxello", "Fatto.")]
+        await player.wait_started()
+
+
+async def test_notify_partial_when_desktop_fails_over_mcp(settings, stack):
+    """Roadmap milestone 4: the `partial` outcome reaches the agent as a result, not an error."""
+    _, player, notifier, service = stack
+    notifier.fail = VoxelloError(NOTIFICATION_UNAVAILABLE, "notifier crashed")
+    async with connected(settings, service) as session:
+        result = await session.call_tool(
+            "notify", {"message": "Fatto.", "channels": ["voice", "desktop"]}
+        )
+        assert not result.is_error
+        assert result.structured_content["status"] == "partial"
+        assert result.structured_content["channels"] == {
+            "voice": "playing",
+            "desktop": "error:notification_unavailable",
+        }
+        assert result.structured_content["request_id"]
+        assert notifier.sent == []
+        await player.wait_started()
+
+
+async def test_notify_failed_when_every_channel_fails_over_mcp(settings, stack):
+    provider, player, notifier, service = stack
+    provider.fail_with = VoxelloError(TTS_PROVIDER_UNAVAILABLE, "down")
+    notifier.fail = VoxelloError(NOTIFICATION_UNAVAILABLE, "notifier crashed")
+    async with connected(settings, service) as session:
+        result = await session.call_tool(
+            "notify", {"message": "Fatto.", "channels": ["voice", "desktop"]}
+        )
+        assert not result.is_error, "a failed delivery is a result the agent can act on"
+        assert result.structured_content["status"] == "failed"
+        assert result.structured_content["channels"] == {
+            "voice": "error:tts_provider_unavailable",
+            "desktop": "error:notification_unavailable",
+        }
+        assert result.structured_content["request_id"] is None
+        assert player.handles == []
+
+
+async def test_notify_file_channel_reports_saved_path_over_mcp(settings, stack, tmp_path):
+    _, player, _, service = stack
+    async with connected(settings, service) as session:
+        result = await session.call_tool(
+            "notify", {"message": "Salvato.", "channels": ["voice", "file"]}
+        )
+        assert not result.is_error
+        assert result.structured_content["status"] == "delivered"
+        assert result.structured_content["channels"] == {"voice": "playing", "file": "saved"}
+        saved = result.structured_content["saved_path"]
+        assert saved is not None and saved.endswith(".wav")
+        assert (tmp_path / "o") in Path(saved).parents
+        assert Path(saved).with_suffix(".txt").read_text() == "Salvato."
         await player.wait_started()
 
 

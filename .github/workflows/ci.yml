@@ -1,16 +1,22 @@
 name: CI
 
+# Runs on pushes to main, pull requests and by hand. `workflow_call` lets release.yml run the
+# same matrix on the tagged commit before anything is built or published.
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
+# A fixed `ci-` prefix, not `github.workflow`: inside a `workflow_call` that expression is the
+# caller's name ("Release"), which would collide with release.yml's own `release-<ref>` group
+# (group names are case-insensitive) and `cancel-in-progress` would cancel the release run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -25,6 +31,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         python: ["3.12", "3.13", "3.14"]
+        include:
+          # Portability leg: the suite runs with fakes, no audio. The coverage floor is not
+          # enforced here because POSIX-only branches are skipped on Windows.
+          - os: windows-latest
+            python: "3.12"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -37,9 +48,13 @@ jobs:
       - name: Type-check
         run: uv run pyright src
       - name: Unit tests with branch coverage
+        if: runner.os != 'Windows'
         run: uv run pytest --cov --cov-report=term-missing --cov-report=xml --cov-report=html
+      - name: Unit tests (Windows, no coverage floor)
+        if: runner.os == 'Windows'
+        run: uv run pytest
       - name: Upload coverage reports
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && runner.os != 'Windows' }}
         uses: actions/upload-artifact@v4
         with:
           name: coverage-${{ matrix.os }}-py${{ matrix.python }}

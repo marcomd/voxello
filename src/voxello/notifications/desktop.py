@@ -1,9 +1,12 @@
 """Desktop notifications through native OS tools, no extra dependencies.
 
 macOS: ``osascript`` (Apple's signed binary, so notifications work even from an
-unsigned Python). Linux: ``notify-send``. Windows: a PowerShell WinRT toast.
-Title and body are passed as arguments or environment variables, never
-interpolated into a script string.
+unsigned Python). Linux: ``notify-send``. Windows: a WinRT toast through Windows
+PowerShell 5.1 (``powershell``, shipped with every supported Windows). PowerShell 7
+(``pwsh``) is deliberately not a fallback here: the WinRT type projection the toast
+script relies on is not available in it, unlike the playback backend where either host
+works. Title and body are passed as arguments or environment variables, never
+interpolated into a script string. Manual verification: ``docs/windows-testing.md``.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ from voxello.errors import NOTIFICATION_UNAVAILABLE, VoxelloError
 
 log = logging.getLogger(__name__)
 
-_WINDOWS_TOAST = r"""  # noqa: E501
+_WINDOWS_TOAST = r"""
 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
 $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
 $nodes = $template.GetElementsByTagName("text")
