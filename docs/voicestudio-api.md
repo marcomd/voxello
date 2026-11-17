@@ -37,6 +37,11 @@ OpenAI-compatible JSON endpoint. Voxello uses only this route.
 | `guidance_scale` | 0-20 | app default 2.0 | if configured |
 | `seed`, `instruct`, `description`, `duration`, `denoise`, `preprocess_prompt`, `chunk_duration`, `chunk_threshold` | | | not used |
 
+Voice design and cloned voices are implemented for omnivoice-server only: Voxello sends design
+attributes as `instructions`, the omnivoice-server name, while VoiceStudio calls the field
+`instruct`, and the `voxello voice` commands use omnivoice-server's `/v1/voices/profiles`, which
+VoiceStudio does not have (`voice_cloning_unsupported`).
+
 Response:
 
 - `200` with **raw audio bytes**. Never parse a 200 as JSON. Voxello checks that the body starts

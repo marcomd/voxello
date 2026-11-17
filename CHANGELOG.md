@@ -7,10 +7,25 @@ change the MCP tool signatures or the configuration layout.
 
 ## [Unreleased]
 
-Per-request language selection (roadmap milestone 3) and quality and robustness work (roadmap
-milestone 4).
+Per-request language selection (roadmap milestone 3), quality and robustness work (roadmap
+milestone 4), and cloned and designed voices (roadmap milestone 6).
 
 ### Added
+
+- Voice design: `instructions` on the `speak` and `notify` tools, `--instructions/-i` on
+  `speak`, `notify` and `cache warm`. Attributes (`female, young adult, high pitch`) are checked
+  against the OmniVoice vocabulary, normalized, sent to omnivoice-server and reported back in
+  `SpeechResult.instructions`. Unknown or conflicting attributes fail with `invalid_instructions`.
+- `speech.voice_designs`: named designs usable wherever a voice is accepted, including
+  `voices_by_language` and `tts.voicestudio.voice`.
+- Cloned voices: `voxello voice clone NAME FILE [--ref-text] [--overwrite] [--yes]`,
+  `voice update`, `voice delete` and `voice list` manage omnivoice-server profiles, used
+  afterwards as `--voice clone:NAME`. `clone` asks to confirm the speaker's permission. New error
+  codes `voice_exists`, `voice_cloning_unsupported` and `invalid_reference_audio`. Cached phrases
+  recorded with a voice are dropped when Voxello changes or deletes it.
+- The `notify` tool and `voxello notify` accept `voice`.
+- `voxello doctor` lists voice designs and cloned voices and warns when the server's voice-design
+  vocabulary differs from Voxello's.
 
 - `tts.voicestudio.connect_timeout_seconds` (5), `retries` (1) and `retry_backoff_seconds` (0.5):
   a synthesis request that fails to connect or gets HTTP 502/503/504 is retried with exponential
@@ -58,6 +73,8 @@ milestone 4).
 
 ### Fixed
 
+- An unknown `clone:<name>` voice (HTTP 404 from omnivoice-server) is reported as `voice_not_found`
+  instead of a missing-endpoint `tts_provider_error`.
 - Desktop notification subprocesses are killed and reaped when delivery times out or is cancelled.
 
 ### Changed

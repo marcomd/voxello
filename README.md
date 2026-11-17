@@ -112,6 +112,57 @@ speech:
 `tts.voicestudio.language`, the global setting of earlier versions, is deprecated: it still acts
 as the default and `voxello doctor` reminds you to move it to `speech.default_language`.
 
+### Cloned and designed voices
+
+OmniVoice can also clone a voice from a short recording or design one from a few attributes.
+Both need omnivoice-server; VoiceStudio exposes neither through this API.
+
+**Cloned voices** are profiles stored on the TTS server, so every client of that server shares
+them. Record 3-10 seconds of clear speech in the language you will use, then:
+
+```bash
+voxello voice clone marco ~/marco.wav --ref-text "The words spoken in the recording."
+voxello speak "Ciao, sono la voce clonata." --voice clone:marco
+voxello voice list                              # cloned voices on the server, designs in the config
+voxello voice update marco --audio ~/better.wav # or --ref-text "..."
+voxello voice delete marco
+```
+
+Without `--ref-text` the server transcribes the recording with Whisper. `clone` asks you to
+confirm you have the speaker's permission (`--yes` skips the prompt): only clone voices whose
+owner agreed, and never treat a voice as proof of identity. Cloning is CLI-only; agents can use
+a cloned voice but cannot create one. Updating or deleting a voice through Voxello also drops the
+phrases cached with it; if you change profiles directly on the server, run `voxello cache clear`.
+
+**Voice design** describes a voice instead of picking one, with at most one attribute per
+category: gender (`male`, `female`), age (`child`, `teenager`, `young adult`, `middle-aged`,
+`elderly`), pitch (`very low pitch` ... `very high pitch`), style (`whisper`) and, for English
+text only, an accent (`american`, `british`, `australian`, `canadian`, `indian`, `chinese`,
+`korean`, `japanese`, `portuguese`, `russian accent`). The model was trained on English and
+Chinese, so designs can sound unstable in other languages such as Italian.
+
+```bash
+voxello speak "The build is green." -l en --instructions "female, young adult, high pitch"
+```
+
+Name the designs you reuse and use the name wherever a voice is accepted (`--voice`, the
+`voice` tool parameter, `voices_by_language`, `tts.voicestudio.voice`):
+
+```yaml
+speech:
+  voice_designs:
+    narrator: "female, young adult, high pitch"
+    whisperer: "male, elderly, whisper"
+  voices_by_language:
+    it: clone:marco
+    en: narrator
+```
+
+A configured name takes precedence over a server voice of the same name. A request passes
+either `voice` or `instructions`, never both; explicit `instructions` ignore the configured
+voices. `voxello doctor` lists the designs and cloned voices and warns when the server's design
+vocabulary differs from Voxello's.
+
 Phrases that repeat, such as the Claude Code hook alerts, are synthesized once and replayed from
 an on-disk audio cache. Notifications are cached by default, `speak` only on request, and only
 phrases up to `max_text_chars` qualify:
@@ -147,6 +198,8 @@ voxello cache warm --hook-phrases -l en         # the English ones, synthesized 
 voxello cache warm phrases.txt                  # one phrase per line ('-' reads stdin)
 voxello cache list                              # hash, size, length, voice, last use; never the text
 voxello cache clear
+voxello speak "Done." -l en -i "male, elderly, whisper"   # voice design (omnivoice-server)
+voxello speak "Fatto." --voice clone:marco      # a voice cloned with `voxello voice clone`
 ```
 
 ## Register with your agent
@@ -259,19 +312,23 @@ project and by the agents' MCP configuration. `voxello doctor` reports which mod
 
 | Tool            | Purpose                                                               | Key parameters                                                                            |
 | --------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `speak`         | synthesize and play text                                              | `text`, `language`, `voice`, `interrupt` (default true), `save`, `play`, `mode`, `cache`, `client_id` |
+| `speak`         | synthesize and play text                                              | `text`, `language`, `voice`, `instructions`, `interrupt` (default true), `save`, `play`, `mode`, `cache`, `client_id` |
 | `stop_speaking` | stop playback and clear the queue                                     | optional `request_id`                                                                     |
 | `get_status`    | state, current request, queue, cache hits, provider and player health | none                                                                                      |
-| `notify`        | route a short message to `voice`, `desktop` and/or `file`             | `message`, `language`, `channels`, `priority`, `title`, `cache`                           |
+| `notify`        | route a short message to `voice`, `desktop` and/or `file`             | `message`, `language`, `channels`, `priority`, `title`, `cache`, `voice`, `instructions`  |
 
 `speak` returns metadata (`request_id`, `status`, `duration_ms`, `saved_path`, `language`,
-`cached`), never audio. `language` is the ISO 639-1 code of the text (`it`, `en`); agents are asked
+`cached`, `instructions`), never audio. `voice` takes a server voice, `clone:<name>` or a design
+name from the config; `instructions` designs a voice from attributes (see
+[Cloned and designed voices](#cloned-and-designed-voices)); agents are asked to leave both unset
+unless the user wants a particular voice. `language` is the ISO 639-1 code of the text (`it`, `en`); agents are asked
 to pass it so pronunciation follows the text, and it falls back to `speech.default_language`.
 `cache` is tri-state: unset follows the policy (notifications yes, verbatim speech no), `true`
 caches a phrase the agent will repeat, `false` keeps one-off text out of the cache. Errors come
 back as tool errors with a stable code: `tts_provider_unavailable`, `tts_provider_unauthorized`,
-`voice_not_found`, `invalid_language`, `text_too_long`, `queue_full`, `playback_unavailable`,
-`notification_unavailable`.
+`voice_not_found`, `invalid_instructions`, `invalid_language`, `text_too_long`, `queue_full`,
+`playback_unavailable`, `notification_unavailable`. The `voice` commands add `voice_exists`,
+`voice_cloning_unsupported` and `invalid_reference_audio`.
 
 ## How it behaves
 
@@ -359,4 +416,5 @@ cancelled, and each job has a 15-minute timeout.
 
 Voxello is Apache-2.0. VoiceStudio is AGPL-3.0 and omnivoice-server is MIT; both are only called
 over HTTP. OmniVoice's model weights are CC-BY-NC (non-commercial); with VoiceStudio you can choose
-another engine through `tts.voicestudio.engine` where that matters.
+another engine through `tts.voicestudio.engine` where that matters. Cloned voices carry the
+rights of the person they belong to: clone only with their permission.
