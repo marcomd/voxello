@@ -1,6 +1,8 @@
 """Configuration model and loading.
 
-Precedence (highest wins): environment variables > YAML config file > defaults.
+Precedence (highest wins): environment variables > project file (``.voxello.yaml``) >
+user YAML config file > defaults. The project file may only set the voice and notification
+keys listed in ``PROJECT_KEYS``.
 
 Environment variables use the ``VOXELLO_`` prefix with ``__`` for nesting, e.g.
 ``VOXELLO_TTS__VOICESTUDIO__BASE_URL``. The flat aliases from the specification are
@@ -14,8 +16,9 @@ from __future__ import annotations
 import logging
 import os
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 import yaml
 from platformdirs import user_cache_dir, user_config_dir
@@ -36,6 +39,20 @@ LANGUAGE_RE = re.compile(LANGUAGE_PATTERN)
 
 # Names of reusable voice designs: the same alphabet omnivoice-server allows for profile ids.
 VOICE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+# Per-project overrides (``.voxello.yaml`` at the project root). Only what shapes the voice
+# and the notification may be set there: a cloned repository must not be able to redirect the
+# TTS server (and so the spoken text), the logs or the storage. ``None`` allows a whole section.
+PROJECT_CONFIG_NAME = ".voxello.yaml"
+PROJECT_KEYS: dict[str, frozenset[str] | None] = {
+    "integrations": None,
+    "speech": frozenset({"default_language", "voices_by_language", "voice_designs"}),
+    "notifications": frozenset({"title"}),
+}
+# Where the project is looked for: an explicit override, then (after the hook payload's
+# `cwd`) the project root Claude Code gives its MCP servers and hooks, then the cwd.
+PROJECT_DIR_ENV_VAR = "VOXELLO_PROJECT_DIR"
+CLAUDE_PROJECT_DIR_ENV_VAR = "CLAUDE_PROJECT_DIR"
 
 # Flat env aliases from the spec -> dotted path in the settings tree.
 FLAT_ENV_ALIASES: dict[str, tuple[str, ...]] = {
@@ -152,6 +169,98 @@ class SpeechSettings(BaseModel):
         return designs
 
 
+class _RoleVoiceSettings(BaseModel):
+    """Voice of one kind of agent message: a voice name or a voice design, never both."""
+
+    voice: str | None = Field(
+        default=None,
+        description="Server voice id, clone:<id> or a name from speech.voice_designs. "
+        "Wins over speech.voices_by_language for this kind of message.",
+    )
+    instructions: str | None = Field(
+        default=None,
+        description="OmniVoice attributes such as 'female, young adult' instead of `voice`.",
+    )
+
+    _section: ClassVar[str] = "integrations"
+
+    @field_validator("voice")
+    @classmethod
+    def _check_voice(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError(f"{cls._section}.voice must name a voice; omit it for the default")
+        return value.strip() if value is not None else None
+
+    @field_validator("instructions")
+    @classmethod
+    def _check_instructions(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            return normalize_instructions(value)
+        except VoxelloError as exc:
+            raise ValueError(f"{cls._section}.instructions: {exc.message}") from exc
+
+    @model_validator(mode="after")
+    def _voice_or_instructions(self) -> _RoleVoiceSettings:
+        if self.voice is not None and self.instructions is not None:
+            raise ValueError(
+                f"{self._section}: set voice or instructions, not both (a cloned voice ignores "
+                "the design and a design overrides a preset)"
+            )
+        return self
+
+
+class PhrasesSettings(_RoleVoiceSettings):
+    """Fixed sentences spoken by the agent hooks (Claude Code Notification, Codex Stop)."""
+
+    _section: ClassVar[str] = "integrations.phrases"
+
+    mode: Literal["cached", "live", "off"] = Field(
+        default="cached",
+        description="cached: the sentence from the message files, synthesized once; live: the "
+        "event's own message, synthesized every time; off: the hooks stay silent.",
+    )
+    language: str | None = Field(
+        default=None,
+        pattern=LANGUAGE_PATTERN,
+        description="Language of the hook sentences; default speech.default_language. "
+        "VOXELLO_HOOK_LANG and --language override it.",
+    )
+    channels: list[Literal["voice", "desktop", "file"]] | None = Field(
+        default=None,
+        description="Channels of the hook notifications; default voice and desktop. "
+        "VOXELLO_HOOK_CHANNELS and --channels override it.",
+    )
+
+
+class SummariesSettings(_RoleVoiceSettings):
+    """Messages the agent writes itself and sends through the MCP tools."""
+
+    _section: ClassVar[str] = "integrations.summaries"
+
+    mode: Literal["on_request", "always"] = Field(
+        default="on_request",
+        description="on_request: the agent speaks only when the user asks; always: the agent "
+        "ends every non-trivial task with a spoken summary.",
+    )
+    enforce: bool = Field(
+        default=False,
+        description="With mode 'always', the Stop hook asks the agent for the summary when a "
+        "turn ended without one.",
+    )
+    min_turn_seconds: int = Field(
+        default=60, ge=0, description="Turns shorter than this are never asked for a summary."
+    )
+
+
+class IntegrationsSettings(BaseModel):
+    """What the agent integrations (Claude Code, Codex) say and with which voice."""
+
+    phrases: PhrasesSettings = Field(default_factory=PhrasesSettings)
+    summaries: SummariesSettings = Field(default_factory=SummariesSettings)
+
+
 class PlaybackSettings(BaseModel):
     enabled: bool = True
     default_interrupt: bool = True
@@ -242,6 +351,7 @@ class Settings(BaseSettings):
     speech: SpeechSettings = Field(default_factory=SpeechSettings)
     playback: PlaybackSettings = Field(default_factory=PlaybackSettings)
     notifications: NotificationsSettings = Field(default_factory=NotificationsSettings)
+    integrations: IntegrationsSettings = Field(default_factory=IntegrationsSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
     cache: CacheSettings = Field(default_factory=CacheSettings)
     output: OutputSettings = Field(default_factory=OutputSettings)
@@ -338,10 +448,112 @@ def load_yaml_config(path: Path) -> dict[str, Any]:
     return loaded
 
 
-def load_settings(config_path: Path | None = None) -> Settings:
-    """Load settings from the resolved YAML file, then apply environment overrides."""
+@dataclass(frozen=True)
+class ProjectConfig:
+    """The project file found from ``searched_from``: its allowed keys and the ignored ones."""
+
+    searched_from: Path
+    path: Path | None = None
+    data: dict[str, Any] = field(default_factory=dict)
+    ignored: list[str] = field(default_factory=list)
+
+
+def project_start_dir(hook_cwd: Path | None = None) -> Path:
+    """Directory the project file is searched from.
+
+    ``$VOXELLO_PROJECT_DIR``, then the ``cwd`` of a hook payload, then ``$CLAUDE_PROJECT_DIR``
+    (set by Claude Code for MCP servers and hooks), then the process working directory.
+    """
+    explicit = os.environ.get(PROJECT_DIR_ENV_VAR)
+    if explicit:
+        return Path(explicit).expanduser()
+    if hook_cwd is not None:
+        return hook_cwd
+    claude = os.environ.get(CLAUDE_PROJECT_DIR_ENV_VAR)
+    if claude:
+        return Path(claude).expanduser()
+    return Path.cwd()
+
+
+def find_project_config(start: Path) -> Path | None:
+    """``.voxello.yaml`` in ``start`` or a parent, up to the repository root (a ``.git``).
+
+    The home directory and the filesystem root are never a project: a file there would
+    silently apply everywhere, which is what the user config is for.
+    """
+    home = Path.home().resolve()
+    current = start.expanduser().resolve()
+    while current != home and current.parent != current:
+        candidate = current / PROJECT_CONFIG_NAME
+        if candidate.is_file():
+            return candidate
+        if (current / ".git").exists():
+            return None
+        current = current.parent
+    return None
+
+
+def load_project_config(start: Path) -> ProjectConfig:
+    """Read and filter the project file found from ``start`` (empty when there is none)."""
+    path = find_project_config(start)
+    if path is None:
+        return ProjectConfig(start)
+    raw = load_yaml_config(path)
+    data: dict[str, Any] = {}
+    ignored: list[str] = []
+    for section, value in raw.items():
+        allowed = PROJECT_KEYS.get(section, ())
+        if allowed is None:
+            data[section] = value
+        elif not allowed or not isinstance(value, dict):
+            ignored.append(str(section))
+        else:
+            kept = {k: v for k, v in value.items() if k in allowed}
+            ignored.extend(f"{section}.{k}" for k in value if k not in allowed)
+            if kept:
+                data[section] = kept
+    if ignored:
+        log.warning(
+            "%s: ignored keys a project file may not set: %s", path, ", ".join(sorted(ignored))
+        )
+    return ProjectConfig(start, path, data, sorted(ignored))
+
+
+def merge_project(base: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
+    """Deep-merge ``project`` over ``base``.
+
+    For a role in ``integrations`` a project ``voice`` or ``instructions`` replaces both of
+    the user's, so "my voice here" never collides with "a designed voice everywhere".
+    """
+    merged = dict(base)
+    for key, value in project.items():
+        current = merged.get(key)
+        if isinstance(value, dict) and isinstance(current, dict):
+            current = dict(current)
+            if key in ("phrases", "summaries") and ({"voice", "instructions"} & value.keys()):
+                current.pop("voice", None)
+                current.pop("instructions", None)
+            merged[key] = merge_project(current, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def load_settings(
+    config_path: Path | None = None,
+    *,
+    project_dir: Path | None = None,
+    use_project: bool = True,
+) -> Settings:
+    """Load the user YAML file, layer the project file over it, then the environment.
+
+    ``project_dir`` is where the project search starts (see :func:`project_start_dir`).
+    """
     path = resolve_config_path(config_path)
     data = load_yaml_config(path)
+    if use_project:
+        project = load_project_config(project_start_dir(project_dir))
+        data = merge_project(data, project.data)
     for var, dotted in FLAT_ENV_ALIASES.items():
         if os.environ.get(var):
             _set_nested(data, dotted, os.environ[var])
@@ -385,6 +597,20 @@ notifications:
   voice: true
   desktop: true
   title: Voxello
+
+integrations:                           # what Claude Code and Codex say, and with which voice
+                                        # per project: .voxello.yaml at the repository root
+  phrases:                              # fixed hook sentences (permission prompt, idle, ...)
+    mode: cached                        # cached | live (the event's own message) | off
+    # voice: clone:marco                # or instructions: "male, middle-aged" (never both)
+    # language: it                      # default: speech.default_language
+    # channels: [voice, desktop]
+  summaries:                            # messages the agent writes (MCP speak / notify)
+    mode: on_request                    # on_request | always (a summary at every task end)
+    # voice: narrator                   # a name from speech.voice_designs, clone:<id>, ...
+    # instructions: "female, young adult"
+    enforce: false                      # with always: the Stop hook asks for a missing summary
+    min_turn_seconds: 60                # shorter turns are never asked for one
 
 storage:
   temp_retention_minutes: 10

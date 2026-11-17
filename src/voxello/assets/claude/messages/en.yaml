@@ -1,5 +1,6 @@
 # Spoken sentences for Claude Code Notification events (English).
-# Keys are Claude Code notification_type values; `default` covers unknown types with no message.
+# Keys are Claude Code notification_type values; `default` covers unknown types with no message;
+# `codex_turn_complete` is spoken by `voxello hook stop --agent codex` when a turn ends.
 # Read by `voxello hook notification` and `voxello cache warm --hook-phrases --language <code>`.
 permission_prompt: "Claude Code is asking for permission to continue."
 idle_prompt: "Claude Code has finished and is waiting for you."
@@ -7,3 +8,4 @@ agent_needs_input: "A Claude agent needs your input."
 agent_completed: "A Claude agent has completed its work."
 elicitation_dialog: "Claude Code needs some information from you."
 default: "Claude Code needs your attention."
+codex_turn_complete: "Codex has finished its work."

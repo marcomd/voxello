@@ -4,29 +4,36 @@
 subcommands are for humans: ``doctor`` checks the setup, ``speak`` does a full
 round trip without an agent, ``config`` manages the config file, ``cache`` inspects
 and pre-fills the audio cache, ``voice`` manages cloned voices and lists voice designs,
-``install claude`` sets up the Claude Code skill and hook.
+``install claude`` / ``install codex`` set up the agent skill and hooks, and
+``hook notification`` / ``hook stop`` are what those hooks run.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import IO, Any, cast
 
-from voxello import __version__, install
+from voxello import __version__, hooks, install
 from voxello.config import (
     EXAMPLE_CONFIG,
     Settings,
     describe_config_path,
+    load_project_config,
     load_settings,
+    project_start_dir,
     resolve_config_path,
 )
+from voxello.core.models import VoiceRole
 from voxello.errors import INVALID_PARAMETER, VoxelloError
 from voxello.logging_setup import configure_logging
 from voxello.tts.base import TTSProvider, VoiceInfo
@@ -135,19 +142,41 @@ def build_parser() -> argparse.ArgumentParser:
         "--language",
         "-l",
         default=None,
-        help=f"Language of the sentence (default: ${install.HOOK_LANG_ENV_VAR} or it)",
+        help=(
+            f"Language of the sentence (default: ${install.HOOK_LANG_ENV_VAR}, then "
+            "integrations.phrases.language, then speech.default_language)"
+        ),
     )
     hook_notification.add_argument(
         "--channels",
         default=None,
         help=(
-            f"Comma-separated channels (default: ${install.HOOK_CHANNELS_ENV_VAR} or "
-            f"{install.HOOK_DEFAULT_CHANNELS})"
+            f"Comma-separated channels (default: ${install.HOOK_CHANNELS_ENV_VAR}, then "
+            f"integrations.phrases.channels, then {install.HOOK_DEFAULT_CHANNELS})"
         ),
     )
     hook_notification.add_argument(
         "--priority", default="high", choices=["low", "normal", "high", "critical"]
     )
+    hook_notification.add_argument(
+        "--mode",
+        default=None,
+        choices=["cached", "live", "off"],
+        help="Override integrations.phrases.mode: the cached sentence, the event's own "
+        "message synthesized live, or no voice",
+    )
+
+    hook_stop = hook_sub.add_parser(
+        "stop",
+        help="Handle a Claude Code or Codex Stop event read as JSON from stdin",
+        description=(
+            "Runs when the agent ends its turn. With integrations.summaries mode 'always' and "
+            "enforce, asks the agent for the spoken summary it skipped (prints a block "
+            "decision); for Codex, otherwise speaks the end-of-turn sentence in a detached "
+            "process. Always prints a JSON object on stdout and never waits for audio."
+        ),
+    )
+    hook_stop.add_argument("--agent", default="claude-code", choices=list(hooks.AGENTS))
 
     cache = sub.add_parser("cache", help="Inspect, clear or pre-fill the audio cache")
     cache_sub = cache.add_subparsers(dest="cache_command", required=True)
@@ -251,13 +280,42 @@ def build_parser() -> argparse.ArgumentParser:
         "--lang",
         choices=install.hook_languages(),
         default=None,
-        help="Language of the spoken hook sentences (default: the hook's own default, Italian)",
+        help="Language of the spoken hook sentences (default: integrations.phrases.language, "
+        "then speech.default_language)",
     )
+    claude.add_argument(
+        "--stop-hook",
+        action="store_true",
+        help="Also register the Stop hook, which asks for a missing spoken summary when "
+        "integrations.summaries has mode 'always' and enforce: true",
+    )
+
+    codex = install_sub.add_parser(
+        "codex",
+        help="Install the voice-notify skill and the Stop hook for Codex",
+        description=(
+            "Copies the voice-notify skill and the hook script into the Codex home and offers "
+            "to register the Stop hook in hooks.json (end-of-turn sentence, and the summary "
+            "request when integrations.summaries enforces it). hooks.json is only modified "
+            "with --yes or after an interactive confirmation; config.toml is never modified."
+        ),
+    )
+    codex.add_argument(
+        "--codex-dir",
+        type=Path,
+        default=None,
+        help="Codex home (default: $CODEX_HOME or ~/.codex)",
+    )
+    codex.add_argument(
+        "--yes", "-y", action="store_true", help="Register the hook in hooks.json without asking"
+    )
+    codex.add_argument("--no-skill", action="store_true", help="Do not install the skill")
+    codex.add_argument("--no-hook", action="store_true", help="Do not install the hook")
     return parser
 
 
-def _load(args: argparse.Namespace) -> Settings:
-    settings = load_settings(args.config)
+def _load(args: argparse.Namespace, project_dir: Path | None = None) -> Settings:
+    settings = load_settings(args.config, project_dir=project_dir)
     level = args.log_level or settings.logging.level
     configure_logging(level, settings.logging.file)
     return settings
@@ -279,7 +337,11 @@ def main(argv: list[str] | None = None) -> int:
         if command == "notify":
             return asyncio.run(cmd_notify(_load(args), args))
         if command == "hook":
-            return asyncio.run(cmd_hook(_load(args), args))
+            # The event comes first: its `cwd` says which project's .voxello.yaml applies.
+            payload = install.parse_hook_payload(sys.stdin.read() if not sys.stdin.isatty() else "")
+            cwd = payload.get("cwd")
+            project_dir = Path(cwd) if isinstance(cwd, str) and cwd else None
+            return asyncio.run(cmd_hook(_load(args, project_dir), args, payload))
         if command == "config":
             return cmd_config(args)
         if command == "cache":
@@ -332,6 +394,8 @@ async def cmd_doctor(
         print(line)
     found = "found" if path.is_file() else "not found, using defaults"
     print(f"Config file: {path} ({found}; source: {source})")
+    for line in describe_project():
+        print(line)
     vs = settings.tts.voicestudio
     print(f"TTS provider: {settings.tts.provider} at {vs.base_url}")
     print(
@@ -339,6 +403,9 @@ async def cmd_doctor(
         f"api_key={'set' if vs.api_key else 'not set'}"
     )
     for line in describe_speech(settings):
+        print(line)
+    print("Agent integrations:")
+    for line in describe_integrations(settings):
         print(line)
 
     if provider is None:
@@ -429,6 +496,13 @@ def describe_voices(voices: list[VoiceInfo], settings: Settings) -> list[str]:
     ]
     if settings.tts.voicestudio.voice:
         configured.append(("voice", settings.tts.voicestudio.voice))
+    integrations = settings.integrations
+    for role, role_settings in (
+        ("phrases", integrations.phrases),
+        ("summaries", integrations.summaries),
+    ):
+        if role_settings.voice:
+            configured.append((f"integrations.{role}.voice", role_settings.voice))
     for label, voice in configured:
         if voice in designs:
             verdict = "voice design (config)"
@@ -505,6 +579,43 @@ def describe_speech(settings: Settings) -> list[str]:
     return lines
 
 
+def describe_project(hook_cwd: Path | None = None) -> list[str]:
+    """``doctor`` lines for the project file (``.voxello.yaml``) that applies here."""
+    project = load_project_config(project_start_dir(hook_cwd))
+    if project.path is None:
+        return [f"Project config: none (searched from {project.searched_from})"]
+    lines = [f"Project config: {project.path}"]
+    if project.ignored:
+        lines.append(
+            f"  WARNING ignored (not allowed in a project file): {', '.join(project.ignored)}"
+        )
+    return lines
+
+
+def describe_integrations(settings: Settings) -> list[str]:
+    """``doctor`` lines for ``integrations``: what the hooks and the agents' summaries say."""
+    phrases = settings.integrations.phrases
+    summaries = settings.integrations.summaries
+
+    def voice_label(voice: str | None, instructions: str | None) -> str:
+        if instructions is not None:
+            return f'design:"{instructions}"'
+        return voice or "default"
+
+    line = (
+        f"  phrases: mode={phrases.mode} voice={voice_label(phrases.voice, phrases.instructions)}"
+    )
+    if phrases.language:
+        line += f" language={phrases.language}"
+    if phrases.channels:
+        line += f" channels={','.join(phrases.channels)}"
+    mode = summaries.mode
+    if summaries.mode == "always" and summaries.enforce:
+        mode += f" (enforced by the Stop hook, turns >= {summaries.min_turn_seconds} s)"
+    summary_voice = voice_label(summaries.voice, summaries.instructions)
+    return [line, f"  summaries: mode={mode} voice={summary_voice}"]
+
+
 async def cmd_speak(settings: Settings, args: argparse.Namespace) -> int:
     from voxello.core.service import VoxelloService
 
@@ -543,6 +654,7 @@ async def _deliver_notification(
     language: str | None,
     voice: str | None = None,
     instructions: str | None = None,
+    role: VoiceRole | None = None,
 ) -> int:
     """Shared body of ``notify`` and ``hook notification``: deliver, print, wait, exit code."""
     from voxello.core.service import VoxelloService
@@ -558,6 +670,7 @@ async def _deliver_notification(
             language=language,
             voice=voice,
             instructions=instructions,
+            role=role,
         )
         print(result.model_dump_json(indent=2))
         if service.playback is not None:
@@ -580,36 +693,115 @@ async def cmd_notify(settings: Settings, args: argparse.Namespace) -> int:
     )
 
 
-async def cmd_hook(settings: Settings, args: argparse.Namespace) -> int:
+async def cmd_hook(settings: Settings, args: argparse.Namespace, payload: dict[str, Any]) -> int:
     if args.hook_command == "notification":
-        return await cmd_hook_notification(settings, args)
+        return await cmd_hook_notification(settings, args, payload)
+    if args.hook_command == "stop":
+        return cmd_hook_stop(settings, args, payload)
     return 2
 
 
-async def cmd_hook_notification(settings: Settings, args: argparse.Namespace) -> int:
+def cmd_hook_stop(settings: Settings, args: argparse.Namespace, payload: dict[str, Any]) -> int:
+    """Agent Stop event (JSON on stdin) -> block decision, detached phrase, or nothing.
+
+    stdout carries only the decision object: ``{}`` lets the agent stop (Codex requires JSON
+    when a Stop hook exits 0). The policy lives in :func:`voxello.hooks.stop_decision`.
+    """
+    transcript = payload.get("transcript_path")
+    decision = hooks.stop_decision(
+        payload,
+        settings,
+        args.agent,
+        now=datetime.now(UTC),
+        lines=hooks.transcript_lines(transcript if isinstance(transcript, str) else None),
+    )
+    output: dict[str, str] = {}
+    if isinstance(decision, hooks.Block):
+        output = {"decision": "block", "reason": decision.reason}
+    elif isinstance(decision, hooks.SpeakPhrase):
+        cwd = payload.get("cwd")
+        _speak_phrase_detached(decision.key, args.config, cwd if isinstance(cwd, str) else None)
+    else:
+        logging.getLogger(__name__).debug("stop hook: %s", decision.why)
+    print(json.dumps(output))
+    return 0
+
+
+def _speak_phrase_detached(key: str, config: Path | None, cwd: str | None = None) -> None:
+    """Speak a message-file sentence in a child that outlives the hook.
+
+    The child is ``voxello hook notification`` fed ``{"notification_type": key}``, so the
+    phrase mode, voice, language, channels and cache are exactly the Notification hook's;
+    the event's ``cwd`` travels along so the child reads the same project file. The agent is
+    not held for the length of the audio.
+    """
+    argv = [sys.executable, "-m", "voxello"]
+    if config is not None:
+        argv += ["--config", str(config)]
+    argv += ["hook", "notification", "--priority", "normal"]
+    child = subprocess.Popen(  # fixed argument list, never a shell
+        argv,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    stdin = cast("IO[bytes]", child.stdin)  # never None with stdin=PIPE
+    event = {"notification_type": key, **({"cwd": cwd} if cwd else {})}
+    stdin.write(json.dumps(event).encode("utf-8"))
+    stdin.close()
+
+
+async def cmd_hook_notification(
+    settings: Settings, args: argparse.Namespace, payload: dict[str, Any]
+) -> int:
     """Claude Code Notification event (JSON on stdin) -> spoken sentence (roadmap 3.3).
 
     The bash hook only resolves the ``voxello`` command and execs this; the sentence
     selection lives in :func:`voxello.install.hook_text` so it has one source of truth.
     """
-    language = (
-        args.language or os.environ.get(install.HOOK_LANG_ENV_VAR) or install.HOOK_DEFAULT_LANGUAGE
-    )
-    channels = _split_channels(
-        args.channels
-        or os.environ.get(install.HOOK_CHANNELS_ENV_VAR)
-        or install.HOOK_DEFAULT_CHANNELS
-    )
-    payload = install.parse_hook_payload(sys.stdin.read() if not sys.stdin.isatty() else "")
-    text = install.hook_text(payload, language)
+    phrases = settings.integrations.phrases
+    language = hook_language(settings, args.language)
+    channels = hook_channels(settings, args.channels)
+    delivery = install.hook_delivery(payload, args.mode or phrases.mode, language)
+    if delivery is None:  # mode off: no voice, other channels still get the sentence
+        channels = [c for c in channels if c != "voice"]
+        if not channels:
+            return 0
+        delivery = install.HookDelivery(install.hook_text(payload, language), language, False)
     return await _deliver_notification(
         settings,
-        text,
+        delivery.text,
         channels=channels,
         priority=args.priority,
-        cache=True,
-        language=language,
+        cache=delivery.cache,
+        language=delivery.language,
+        role="phrase",
     )
+
+
+def hook_language(settings: Settings, explicit: str | None) -> str:
+    """Language of the hook sentences: argument, ``$VOXELLO_HOOK_LANG``,
+    ``integrations.phrases.language``, then ``speech.default_language`` when a message file
+    exists for it, else the hook's own default (Italian)."""
+    configured = explicit or os.environ.get(install.HOOK_LANG_ENV_VAR)
+    configured = configured or settings.integrations.phrases.language
+    if configured:
+        return configured
+    default = settings.speech.default_language
+    return default if default in install.hook_languages() else install.HOOK_DEFAULT_LANGUAGE
+
+
+def hook_channels(settings: Settings, explicit: str | None) -> list[str]:
+    """Channels of the hook: argument, ``$VOXELLO_HOOK_CHANNELS``,
+    ``integrations.phrases.channels``, then voice and desktop."""
+    raw = explicit or os.environ.get(install.HOOK_CHANNELS_ENV_VAR)
+    if raw:
+        return _split_channels(raw)
+    configured = settings.integrations.phrases.channels
+    if configured:
+        return list(configured)
+    return _split_channels(install.HOOK_DEFAULT_CHANNELS)
 
 
 def describe_cache(settings: Settings) -> str:
@@ -668,7 +860,7 @@ def cmd_cache(settings: Settings, args: argparse.Namespace) -> int:
     return 2
 
 
-def _read_phrases(args: argparse.Namespace) -> tuple[list[str], str | None]:
+def _read_phrases(settings: Settings, args: argparse.Namespace) -> tuple[list[str], str | None]:
     """Phrases to warm and the language to synthesize them in (``None`` = default).
 
     With ``--hook-phrases`` the language also selects the message file, so the English
@@ -677,11 +869,7 @@ def _read_phrases(args: argparse.Namespace) -> tuple[list[str], str | None]:
     if args.hook_phrases and args.source:
         raise VoxelloError(INVALID_PARAMETER, "Pass either FILE or --hook-phrases, not both.")
     if args.hook_phrases:
-        language = (
-            args.language
-            or os.environ.get(install.HOOK_LANG_ENV_VAR)
-            or install.HOOK_DEFAULT_LANGUAGE
-        )
+        language = hook_language(settings, args.language)
         return list(dict.fromkeys(install.hook_phrases(language).values())), language
     if not args.source:
         raise VoxelloError(
@@ -699,7 +887,7 @@ def _read_phrases(args: argparse.Namespace) -> tuple[list[str], str | None]:
 async def cmd_cache_warm(settings: Settings, args: argparse.Namespace) -> int:
     from voxello.core.service import VoxelloService
 
-    phrases, language = _read_phrases(args)
+    phrases, language = _read_phrases(settings, args)
     if not phrases:
         print("No phrases to warm.", file=sys.stderr)
         return 1
@@ -717,6 +905,8 @@ async def cmd_cache_warm(settings: Settings, args: argparse.Namespace) -> int:
                     cache=True,
                     language=language,
                     instructions=args.instructions,
+                    # The hook sentences get the phrase voice, so the keys match the hook's.
+                    role="phrase" if args.hook_phrases else None,
                 )
             except VoxelloError as exc:
                 failed += 1
@@ -861,6 +1051,8 @@ def _installation_kind() -> tuple[str, str | None]:
 def cmd_install(args: argparse.Namespace) -> int:
     if args.install_command == "claude":
         return cmd_install_claude(args)
+    if args.install_command == "codex":
+        return cmd_install_codex(args)
     return 2
 
 
@@ -874,18 +1066,65 @@ def cmd_install_claude(args: argparse.Namespace) -> int:
         return 0
 
     hook = install.install_hook(claude_dir)
-    print(f"Notification hook: {hook.status} ({hook.path})")
+    print(f"Hook script: {hook.status} ({hook.path})")
     settings_path = claude_dir / "settings.json"
-    entry = install.hook_settings_entry(hook.path, lang=args.lang)
-    if install.hook_registered(settings_path):
-        print(f"Hook already registered in {settings_path}; nothing to change.")
-        _print_next_steps()
-        return 0
+    _offer_hook_entry(
+        settings_path,
+        install.hook_settings_entry(hook.path, lang=args.lang),
+        install.HOOK_EVENT,
+        yes=args.yes,
+    )
+    if args.stop_hook:
+        _offer_hook_entry(
+            settings_path,
+            install.stop_settings_entry(hook.path, "claude-code"),
+            install.STOP_EVENT,
+            yes=args.yes,
+        )
+        print(SUMMARIES_HINT)
+    _print_next_steps("claude mcp add --scope user --transport stdio voxello -- voxello serve")
+    return 0
 
-    print(f"\nTo enable the hook, add this to {settings_path}:\n")
-    print(install.render_settings_snippet(entry))
+
+def cmd_install_codex(args: argparse.Namespace) -> int:
+    codex_dir = (args.codex_dir or install.default_codex_dir()).expanduser()
+    print(f"Codex home: {codex_dir}")
+    if not args.no_skill:
+        skill = install.install_skill(codex_dir)
+        print(f"Skill voice-notify: {skill.status} ({skill.path})")
+    if not args.no_hook:
+        hook = install.install_hook(codex_dir)
+        print(f"Hook script: {hook.status} ({hook.path})")
+        _offer_hook_entry(
+            codex_dir / "hooks.json",
+            install.stop_settings_entry(hook.path, "codex"),
+            install.STOP_EVENT,
+            yes=args.yes,
+        )
+        print(SUMMARIES_HINT)
+    print(
+        f"\nRegister the MCP server in {codex_dir / 'config.toml'} (not edited by Voxello):\n\n"
+        '[mcp_servers.voxello]\ncommand = "voxello"\nargs = ["serve"]'
+    )
+    _print_next_steps()
+    return 0
+
+
+SUMMARIES_HINT = (
+    "The Stop hook asks for a missing spoken summary only with, in Voxello's config.yaml:\n"
+    "  integrations:\n    summaries:\n      mode: always\n      enforce: true"
+)
+
+
+def _offer_hook_entry(settings_path: Path, entry: dict, event: str, *, yes: bool) -> None:
+    """Show ``entry`` for ``hooks.<event>`` and write it only with ``--yes`` or a "y"."""
+    if install.hook_registered(settings_path, event):
+        print(f"{event} hook already registered in {settings_path}; nothing to change.")
+        return
+    print(f"\nTo enable the {event} hook, add this to {settings_path}:\n")
+    print(install.render_settings_snippet(entry, event))
     print()
-    if args.yes:
+    if yes:
         write = True
     elif sys.stdin.isatty():
         answer = input(f"Add it to {settings_path} now? [y/N] ")
@@ -894,20 +1133,15 @@ def cmd_install_claude(args: argparse.Namespace) -> int:
         write = False
         print("Re-run with --yes to write it, or add it by hand.")
     if write:
-        install.merge_hook_into_settings(settings_path, entry)
-        print(f"Registered the hook in {settings_path}")
+        install.merge_hook_into_settings(settings_path, entry, event)
+        print(f"Registered the {event} hook in {settings_path}")
     else:
         print(f"{settings_path} left untouched.")
-    _print_next_steps()
-    return 0
 
 
-def _print_next_steps() -> None:
-    print(
-        "\nNext steps:\n"
-        "  claude mcp add --scope user --transport stdio voxello -- voxello serve\n"
-        "  voxello doctor"
-    )
+def _print_next_steps(*commands: str) -> None:
+    lines = "".join(f"  {command}\n" for command in (*commands, "voxello doctor"))
+    print(f"\nNext steps:\n{lines}", end="")
 
 
 def cmd_config(args: argparse.Namespace) -> int:

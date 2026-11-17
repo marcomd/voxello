@@ -29,6 +29,9 @@ TERMINAL_STATES = frozenset({RequestState.COMPLETED, RequestState.CANCELLED, Req
 SpeechMode = Literal["verbatim", "summary", "notification"]
 Priority = Literal["low", "normal", "high", "critical"]
 Channel = Literal["voice", "desktop", "file"]
+# Kind of agent message, each with its own configurable voice (integrations.phrases/.summaries):
+# fixed hook sentences, or text the agent wrote itself.
+VoiceRole = Literal["phrase", "summary"]
 ServiceStatus = Literal["idle", "generating", "playing", "queued", "stopping", "error"]
 
 

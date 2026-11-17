@@ -13,9 +13,10 @@ from mcp.client.session import ClientSession
 from mcp.shared.memory import create_client_server_memory_streams
 from mcp.types import CallToolResult, TextContent
 
+from voxello.config import IntegrationsSettings, Settings
 from voxello.core.service import VoxelloService
 from voxello.errors import NOTIFICATION_UNAVAILABLE, TTS_PROVIDER_UNAVAILABLE, VoxelloError
-from voxello.mcp.server import create_server
+from voxello.mcp.server import build_instructions, create_server
 from voxello.storage.files import OutputStore, TempStore
 
 from .conftest import FakeNotifier, FakePlayer, FakeProvider
@@ -233,3 +234,31 @@ async def test_invalid_arguments_are_rejected(settings, stack):
         result = await session.call_tool("speak", {"text": ""})
         assert result.is_error
         assert json.loads(json.dumps(result.model_dump(by_alias=True)))  # serializable
+
+
+async def test_agent_messages_use_the_summary_voice_and_skip_the_cache(settings, stack):
+    """Text that comes through MCP is written by the agent, so it gets the summary voice."""
+    provider, player, _, service = stack
+    settings.integrations = IntegrationsSettings(
+        summaries={"voice": "clone:anna"}, phrases={"voice": "clone:marco"}
+    )
+    async with connected(settings, service) as session:
+        await session.call_tool("notify", {"message": "Ho finito.", "channels": ["voice"]})
+        await player.wait_started()
+        await session.call_tool("speak", {"text": "Ecco il riepilogo.", "play": False})
+        await session.call_tool(
+            "notify", {"message": "Altro.", "channels": ["voice"], "voice": "clone:zoe"}
+        )
+    assert [voice for _, voice, _ in provider.calls] == ["clone:anna", "clone:anna", "clone:zoe"]
+
+
+def test_server_instructions_follow_the_summaries_mode():
+    on_request = build_instructions(Settings())
+    always = build_instructions(Settings(integrations={"summaries": {"mode": "always"}}))
+    assert "`cache: false`" in on_request
+    assert "every task" not in on_request
+    assert always.startswith(on_request)
+    assert "every task" in always and "last tool call" in always
+    assert create_server(Settings(integrations={"summaries": {"mode": "always"}})).instructions == (
+        always
+    )

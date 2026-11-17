@@ -8,9 +8,36 @@ change the MCP tool signatures or the configuration layout.
 ## [Unreleased]
 
 Per-request language selection (roadmap milestone 3), quality and robustness work (roadmap
-milestone 4), and cloned and designed voices (roadmap milestone 6).
+milestone 4), cloned and designed voices (roadmap milestone 6), and configurable agent
+notifications for Claude Code and Codex (roadmap milestone 7).
 
 ### Added
+
+- `integrations` in `config.yaml` chooses what the agent integrations say and with which voice.
+  `integrations.phrases` (hook sentences): `mode` `cached` (default, as before), `live` (the
+  event's own message, synthesized every time) or `off`, plus `voice` or `instructions`,
+  `language` and `channels`. `integrations.summaries` (text the agent writes): `mode`
+  `on_request` (default) or `always`, `voice` or `instructions`, `enforce` and
+  `min_turn_seconds`. The role voice wins over `speech.voices_by_language`; a request's own
+  voice still wins over it. `voxello doctor` prints both and checks the configured voices.
+- With `summaries.mode: always` the MCP server instructions ask every client to end each
+  non-trivial task with one spoken `notify` summary.
+- `voxello hook stop --agent claude-code|codex`: reads a Stop event and, with
+  `summaries.enforce`, asks the agent once for the spoken summary it skipped (only for turns of
+  at least `min_turn_seconds`, never when `stop_hook_active`, never when the transcript cannot
+  be read). For Codex it otherwise speaks the new `codex_turn_complete` sentence in a detached
+  process. `voxello install claude --stop-hook` registers it for Claude Code.
+- `voxello install codex`: copies the `voice-notify` skill and the hook script into
+  `$CODEX_HOME` (`~/.codex`), offers the Stop entry for `hooks.json` and prints the
+  `config.toml` MCP block without editing it.
+- `voxello hook notification --mode cached|live|off` overrides `integrations.phrases.mode`.
+- Per-project overrides: a `.voxello.yaml` in the project (searched up to the repository root,
+  never in the home directory) is layered over `config.yaml` for the hooks, the MCP server and
+  the CLI, so each project can have its own voices and desktop title. Only `integrations`,
+  `speech.default_language`, `speech.voices_by_language`, `speech.voice_designs` and
+  `notifications.title` are taken; other keys are ignored with a warning. Hooks search from the
+  event's `cwd`, the MCP server from `$CLAUDE_PROJECT_DIR` or its working directory;
+  `VOXELLO_PROJECT_DIR` overrides both. `voxello doctor` prints the project file in use.
 
 - Voice design: `instructions` on the `speak` and `notify` tools, `--instructions/-i` on
   `speak`, `notify` and `cache warm`. Attributes (`female, young adult, high pitch`) are checked
@@ -79,6 +106,19 @@ milestone 4), and cloned and designed voices (roadmap milestone 6).
 - Desktop notification subprocesses are killed and reaped when delivery times out or is cancelled.
 
 ### Changed
+
+- Text that reaches Voxello through the MCP `speak`/`notify` tools is no longer cached unless the
+  agent passes `cache: true`: agent summaries do not repeat. `voxello notify` and the hooks keep
+  the previous default.
+- The hook script no longer passes `--language it --channels voice,desktop` itself: without
+  `VOXELLO_HOOK_LANG`/`VOXELLO_HOOK_CHANNELS` the language comes from
+  `integrations.phrases.language`, then `speech.default_language` when a message file exists
+  for it (else Italian), and the channels from `integrations.phrases.channels`. `cache warm
+  --hook-phrases` uses the same language and the phrase voice, so its keys match the hook's.
+- The `voice-notify` skill passes `cache: false`, leaves the voice and the desktop title to the
+  configuration (the title is now `notifications.title`, "Voxello" by default, instead of
+  "Claude Code") and applies to every task when the server instructions say summaries are
+  always on.
 
 - The Claude Code hook script no longer contains the spoken sentences nor parses JSON (no `jq`
   or `python3` needed): it only resolves the `voxello` command and execs

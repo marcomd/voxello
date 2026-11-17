@@ -164,8 +164,9 @@ voices. `voxello doctor` lists the designs and cloned voices and warns when the 
 vocabulary differs from Voxello's.
 
 Phrases that repeat, such as the Claude Code hook alerts, are synthesized once and replayed from
-an on-disk audio cache. Notifications are cached by default, `speak` only on request, and only
-phrases up to `max_text_chars` qualify:
+an on-disk audio cache. The hooks and `voxello notify` cache by default; text an agent sends
+through the MCP tools, and `speak`, only on request (`cache: true`, `--cache`); only phrases up
+to `max_text_chars` qualify:
 
 ```yaml
 cache:
@@ -233,43 +234,179 @@ If the agent's environment does not see `~/.local/bin`, use the absolute path pr
 `uv run --directory /path/to/voxello voxello serve` as the command instead.
 
 Then ask the agent, for example: *"Refactor the auth module, run the tests, and tell me by
-voice when you are done."*
+voice when you are done."* To get alerts and summaries without asking every time, see
+[Voice notifications for Claude Code and Codex](#voice-notifications-for-claude-code-and-codex).
 
-## Claude Code skill and hook
+## Voice notifications for Claude Code and Codex
 
-Two small Claude Code additions ship inside the package and turn Voxello into the "tell me when
-you are done" workflow. Install both with one command:
+Voxello can tell you, out loud, when an agent needs you or has finished. There are two kinds of
+message, and you choose each one's mode and voice:
 
-```bash
-voxello install claude          # add --yes to register the hook without being asked
+| You hear | When | Who writes it | Cached |
+|----------|------|---------------|--------|
+| **Phrase**: "Claude Code chiede un permesso per continuare." | Claude Code waits on a permission prompt or goes idle; a Codex turn ends | Voxello, from fixed sentences | yes (`mode: cached`) |
+| **Summary**: "Refactoring completato, tutti i test passano. I dettagli sono nella risposta." | The agent finishes, fails or gets blocked | The agent itself, through the `notify` tool | no |
+
+Phrases are deterministic: a hook fires them, whatever the model does. Summaries carry the
+outcome, but they depend on the agent making the call; Voxello never writes or shortens them.
+
+### Set it up
+
+1. **Register the MCP server** with your agent (see [Register with your agent](#register-with-your-agent)).
+2. **Install the skill and the hooks:**
+
+   ```bash
+   voxello install claude --stop-hook   # Claude Code: skill + Notification hook (+ Stop hook)
+   voxello install codex                # Codex: skill + Stop hook
+   ```
+
+   Each command copies the files and shows the JSON entry it needs (`~/.claude/settings.json`
+   or `~/.codex/hooks.json`); it writes that file only after you confirm, or with `--yes`.
+   Running it again is harmless. `config.toml` of Codex is never edited.
+3. **Choose what you want to hear** in Voxello's `config.yaml` (`voxello config path`):
+
+   ```yaml
+   integrations:
+     phrases:
+       mode: cached            # cached | live | off
+     summaries:
+       mode: always            # on_request | always
+       enforce: true           # needs the Stop hook from step 2
+   ```
+
+4. **Pre-synthesize the phrases** so the first alert is instant, and check everything:
+
+   ```bash
+   voxello cache warm --hook-phrases
+   voxello doctor              # "Agent integrations" and "Project config" lines
+   ```
+
+Restart the agent after changing `summaries`: the MCP server reads it when it starts.
+
+### Modes
+
+`integrations.phrases.mode`:
+
+- `cached` (default): the sentence for the event from the message files shipped with Voxello
+  (`it`, `en`), synthesized once and replayed from the audio cache, even while the TTS server is
+  down.
+- `live`: the event's own text, for example "Claude needs your permission to use Bash",
+  synthesized every time and never cached. Claude Code writes it in English, so it is spoken
+  in English.
+- `off`: no voice. The desktop notification still appears if `desktop` is among the channels.
+
+`integrations.summaries.mode`:
+
+- `on_request` (default): the agent speaks only when you ask, for example "avvisami a voce
+  quando hai finito" or "tell me out loud when you're done" (the `voice-notify` skill).
+- `always`: the server instructions ask the agent to end every task that took more than a few
+  seconds with a spoken summary. This works with any MCP client.
+- `enforce: true` (with `always`): when a turn of at least `min_turn_seconds` (60) ends without
+  a summary, the Stop hook asks the agent once to deliver it before stopping.
+
+With Codex, which has no event for "waiting for you", the Stop hook says "Codex ha finito il
+lavoro." at the end of a turn without a summary (a phrase: it follows `phrases.mode` and voice).
+
+### Voices
+
+Each kind of message takes its own voice, so you can tell an alert from a summary by ear:
+
+```yaml
+speech:
+  voice_designs:
+    narrator: "female, young adult"
+integrations:
+  phrases:
+    voice: clone:marco          # a cloned voice (`voxello voice clone marco FILE`)
+  summaries:
+    voice: narrator             # a named design, or:
+    # instructions: "male, middle-aged, low pitch"
 ```
 
-It copies the `voice-notify` skill to `~/.claude/skills/voice-notify/SKILL.md` and the
-Notification hook to `~/.claude/hooks/voxello-notification-hook.sh`, prints the JSON entry the
-hook needs in `~/.claude/settings.json`, and writes it only after you confirm (or with `--yes`).
-Existing settings are preserved; running it again is harmless. Options: `--claude-dir` (defaults
-to `$CLAUDE_CONFIG_DIR` or `~/.claude`), `--lang en` for English hook sentences, `--no-hook`,
-`--no-skill`. The same files live in this repository under `.claude/` for people working in the
-checkout.
+`voice` takes a server voice, `clone:<name>` or a name from `speech.voice_designs`;
+`instructions` takes the attributes directly. Set one of the two, never both. The voice of a
+message is chosen in this order:
 
-**`voice-notify` skill.** When you ask Claude Code to notify you by voice ("avvisami a voce quando
-hai finito", "notify me by voice", "leggimelo"), the skill activates and Claude ends the task with
-one `notify` call carrying a one or two sentence spoken summary in your language, on the voice and
-desktop channels, with high priority when the task failed or is blocked. It can also be invoked
-explicitly with `/voice-notify`. The skill relies on the model to make the final call; the hook
-below is the deterministic half.
+1. `voice` or `instructions` passed in the request (only if you ask the agent for a voice);
+2. `integrations.phrases` or `integrations.summaries`, depending on the kind of message;
+3. `speech.voices_by_language` for the message's language;
+4. `tts.voicestudio.voice`;
+5. the server's default voice.
 
-**Notification hook.** Claude Code fires a `Notification` event when it waits on a permission
-prompt or goes idle. The hook script looks for `voxello` on the PATH, then in `~/.local/bin`, then
-falls back to `uv run --directory "$VOXELLO_REPO"` if that variable points to a checkout (when none
-is available it logs to stderr and exits without speaking) and hands the event to
-`voxello hook notification`. That command picks a short sentence for the notification type from
-the message files shipped in the package (`voxello/assets/claude/messages/it.yaml`, `en.yaml`),
-for example "Claude Code chiede un permesso per continuare.", and delivers it through `notify` in
-that language with `--cache`, so each sentence is synthesized once and later alerts play even
-while the TTS server is down; run `voxello cache warm --hook-phrases --language it` (or `en`) so
-the very first alert is instant. Adding a language is adding a message file. This is the entry
-`voxello install claude` proposes for `~/.claude/settings.json`:
+A new phrase voice means new audio: run `voxello cache warm --hook-phrases` again.
+
+### A different voice in each project
+
+Put a `.voxello.yaml` at the root of a project. It is layered over your `config.yaml` for
+everything that runs in that project: the hooks, the agent's summaries, and the CLI started
+there. For example, to hear your own voice for one project and a voice of the opposite sex for
+another, and know which agent is talking before you read a word:
+
+```yaml
+# ~/code/alfa/.voxello.yaml
+integrations:
+  phrases:   { voice: clone:marco }
+  summaries: { voice: clone:marco }
+notifications:
+  title: Alfa                   # title of the desktop notification
+```
+
+```yaml
+# ~/code/beta/.voxello.yaml
+integrations:
+  phrases:   { instructions: "female, young adult" }
+  summaries: { instructions: "female, young adult" }
+notifications:
+  title: Beta
+```
+
+Then, in each project, `voxello cache warm --hook-phrases` and `voxello doctor`, which prints
+the project file in use.
+
+- **Where it is looked for.** In the project directory and its parents, up to the repository
+  root (the directory with `.git`), never in your home directory. The hooks start from the
+  `cwd` of the event, the MCP server from `$CLAUDE_PROJECT_DIR` (set by Claude Code) or its
+  working directory. `VOXELLO_PROJECT_DIR` overrides all of them.
+- **What it may set.** `integrations`, `speech.default_language`, `speech.voices_by_language`,
+  `speech.voice_designs` and `notifications.title`. Anything else, such as `tts.*` or
+  `logging.*`, is ignored with a warning, so a cloned repository cannot send your spoken text
+  to another TTS server or turn on text logging.
+- **What wins.** Environment variables, then `.voxello.yaml`, then `config.yaml`, then the
+  defaults. A `voice` or `instructions` in the project replaces both of them from
+  `config.yaml` for that kind of message; other keys are merged.
+- **Commit it or not.** A file that names your cloned voice is personal: add `.voxello.yaml`
+  to `.gitignore` (or to `.git/info/exclude`) unless the team shares the voices.
+- **Codex.** Its hooks pass the project's `cwd`, so phrases always follow the project. Its
+  documentation does not say which working directory the MCP server starts in; if summaries
+  keep the global voice, set it in the project's `.codex/config.toml`:
+
+  ```toml
+  [mcp_servers.voxello]
+  command = "voxello"
+  args = ["serve"]
+  cwd = "/Users/you/code/beta"
+  ```
+
+### Overrides and reference
+
+Every key also has an environment variable, for example `VOXELLO_INTEGRATIONS__PHRASES__MODE=off`
+or `VOXELLO_INTEGRATIONS__SUMMARIES__VOICE=clone:marco`. The hook script also honours
+`VOXELLO_HOOK_LANG=en` (language of the phrases) and `VOXELLO_HOOK_CHANNELS=desktop` (no voice),
+which you can put in front of its command in `settings.json`; `voxello install claude --lang en`
+does that for you. Review or disable the Claude Code hooks with `/hooks`.
+
+**What gets installed.** The `voice-notify` skill (`~/.claude/skills/` or `~/.codex/skills/`)
+tells the agent how to write a spoken summary: one or two sentences, in your language, no code
+or paths, `priority: high` when it failed or is blocked, `cache: false`, voice left to the
+configuration. It can also be invoked explicitly with `/voice-notify`. The hook script
+`voxello-notification-hook.sh` only finds the `voxello` command (on the PATH, in
+`~/.local/bin`, or `uv run --directory "$VOXELLO_REPO"` from a checkout) and hands it the event;
+when none is available it logs to stderr and exits without speaking. Adding a language for the
+phrases is adding a file under `voxello/assets/claude/messages/`. The same files live in this
+repository under `.claude/` for people working in the checkout.
+
+The entries `voxello install claude --stop-hook` proposes for `~/.claude/settings.json` (the
+Stop hook is synchronous because Claude Code reads its output):
 
 ```json
 {
@@ -286,13 +423,26 @@ the very first alert is instant. Adding a language is adding a message file. Thi
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/you/.claude/hooks/voxello-notification-hook.sh stop",
+            "timeout": 30
+          }
+        ]
+      }
     ]
   }
 }
 ```
 
-The script speaks Italian by default; set `VOXELLO_HOOK_LANG=en` for English and
-`VOXELLO_HOOK_CHANNELS=desktop` to keep it silent. Review or disable it later with `/hooks`.
+`voxello install codex` proposes the same `Stop` entry for `~/.codex/hooks.json`, with the
+command ending in `stop codex`. Options of both commands: `--claude-dir` / `--codex-dir`
+(default `$CLAUDE_CONFIG_DIR` or `~/.claude`, `$CODEX_HOME` or `~/.codex`), `--no-skill`,
+`--no-hook`, `--yes`.
 
 ## Use inside a project with `uv run`
 
@@ -341,7 +491,7 @@ back as tool errors with a stable code: `tts_provider_unavailable`, `tts_provide
   Logs record text length, not text, unless `logging.log_text: true`.
 - **Cached phrases persist, hashed.** Cached audio lives in its own 0700 directory under a
   SHA-256 of the text and synthesis parameters; the text itself is never written there. Only
-  notifications (or explicit `cache: true`) up to 300 characters are cached, the least recently
+  hook phrases and CLI notifications (or explicit `cache: true`) up to 300 characters are cached, the least recently
   used entries are dropped beyond `cache.max_entries` or `cache.max_age_days`, and
   `voxello cache clear` empties it. Set `cache.enabled: false` to keep every new WAV
   short-lived; phrases cached earlier stay on disk until `voxello cache clear`, which works

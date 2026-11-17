@@ -1,15 +1,24 @@
 #!/usr/bin/env bash
-# Claude Code Notification hook -> Voxello voice + desktop notification.
+# Claude Code / Codex hook -> Voxello.
+#
+#   voxello-notification-hook.sh             Claude Code Notification event (the default)
+#   voxello-notification-hook.sh stop        Claude Code Stop event
+#   voxello-notification-hook.sh stop codex  Codex Stop event
 #
 # Claude Code pipes a JSON object on stdin with at least:
 #   {"hook_event_name":"Notification","notification_type":"permission_prompt","message":"..."}
 # This script only finds the Voxello CLI and hands that JSON to `voxello hook notification`,
 # which picks the spoken sentence for the notification type from the message files shipped
-# in the package (voxello/assets/claude/messages/<language>.yaml) and delivers it through
-# `notify --cache` in that language. The fixed sentences are synthesized once and replayed
-# from the audio cache afterwards (`voxello cache warm --hook-phrases` pre-fills them).
-# Adding a language means adding a message file; this script does not change. It never
-# blocks Claude Code (configure it with "async": true).
+# in the package (voxello/assets/claude/messages/<language>.yaml) and delivers it as
+# integrations.phrases in Voxello's config.yaml says: cached (the default: synthesized once,
+# `voxello cache warm --hook-phrases` pre-fills them), live or off, with the voice configured
+# there. Adding a language means adding a message file; this script does not change. The
+# Notification hook never blocks Claude Code (configure it with "async": true).
+#
+# With `stop` it hands the Stop JSON to `voxello hook stop`, which may ask the agent for the
+# spoken summary it skipped (integrations.summaries: mode always, enforce true) and, for Codex,
+# speaks the end-of-turn sentence. Its stdout is the decision the agent reads, so it is kept;
+# register the Stop hook without "async".
 #
 # How the CLI is found, in order:
 #   1. `voxello` on the PATH (for example after `uv tool install voxello`)
@@ -18,14 +27,14 @@
 #   4. the checkout this script lives in, when run from .claude/hooks/ inside the repo
 # When none applies, the script logs to stderr and exits 1 without speaking.
 #
-# Environment:
+# Environment (each one overrides integrations.phrases in config.yaml):
 #   VOXELLO_REPO           Voxello checkout, used only when `voxello` is not on the PATH
-#   VOXELLO_HOOK_LANG      language of the spoken sentence: "it" (default) or "en"
-#   VOXELLO_HOOK_CHANNELS  comma-separated channels (default: voice,desktop)
+#   VOXELLO_HOOK_LANG      language of the spoken sentence, e.g. "it" or "en"
+#   VOXELLO_HOOK_CHANNELS  comma-separated channels, e.g. "desktop" to silence the voice
 set -u
 
-LANG_CODE="${VOXELLO_HOOK_LANG:-it}"
-CHANNELS="${VOXELLO_HOOK_CHANNELS:-voice,desktop}"
+EVENT="${1:-notification}"
+AGENT="${2:-claude-code}"
 
 log() { printf 'voxello-notification-hook: %s\n' "$*" >&2; }
 
@@ -53,6 +62,14 @@ if [ "${#VOXELLO_CMD[@]}" -eq 0 ]; then
   exit 1
 fi
 
-# stdin (the Notification JSON) flows through to voxello. stdout is discarded (it is JSON for
-# humans); stderr stays visible in Claude Code's hook output.
-exec "${VOXELLO_CMD[@]}" hook notification --language "$LANG_CODE" --channels "$CHANNELS" >/dev/null
+# stdin (the event JSON) flows through to voxello; stderr stays visible in the hook output.
+if [ "$EVENT" = "stop" ]; then
+  exec "${VOXELLO_CMD[@]}" hook stop --agent "$AGENT"
+fi
+
+# Notification: only the overrides that are set are passed, so config.yaml decides the rest.
+# stdout is discarded (it is JSON for humans).
+ARGS=(hook notification)
+[ -n "${VOXELLO_HOOK_LANG:-}" ] && ARGS+=(--language "$VOXELLO_HOOK_LANG")
+[ -n "${VOXELLO_HOOK_CHANNELS:-}" ] && ARGS+=(--channels "$VOXELLO_HOOK_CHANNELS")
+exec "${VOXELLO_CMD[@]}" "${ARGS[@]}" >/dev/null

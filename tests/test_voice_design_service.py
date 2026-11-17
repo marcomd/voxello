@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from voxello.config import Settings
+from voxello.config import IntegrationsSettings, Settings
 from voxello.core.models import VoiceChoice
 from voxello.core.service import VoxelloService, resolve_voice
 from voxello.errors import INVALID_INSTRUCTIONS, INVALID_PARAMETER, VoxelloError
@@ -133,3 +133,80 @@ async def test_notify_reports_rejected_instructions_as_failed_voice(
     assert result.status == "failed"
     assert result.channels["voice"] == f"error:{INVALID_INSTRUCTIONS}"
     assert provider.calls == []
+
+
+# -- voice per kind of agent message (integrations.phrases / .summaries) -------------------
+
+
+def role_settings(phrases: dict | None = None, summaries: dict | None = None) -> Settings:
+    settings = make_settings(voices_by_language={"it": "clone:marco"})
+    settings.tts.voicestudio.voice = "nova"
+    return Settings.model_validate(
+        {
+            **settings.model_dump(),
+            "integrations": {"phrases": phrases or {}, "summaries": summaries or {}},
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("role", "phrases", "summaries", "expected"),
+    [
+        ("phrase", {"voice": "clone:anna"}, {}, VoiceChoice("clone:anna", None)),
+        ("phrase", {"voice": "narrator"}, {}, VoiceChoice(None, DESIGNS["narrator"])),
+        ("phrase", {"instructions": "child"}, {}, VoiceChoice(None, "child")),
+        ("summary", {"voice": "clone:anna"}, {"instructions": "male"}, VoiceChoice(None, "male")),
+        ("summary", {}, {"voice": "whisperer"}, VoiceChoice(None, DESIGNS["whisperer"])),
+        # A role without a voice falls through to the existing precedence.
+        ("summary", {"voice": "clone:anna"}, {}, VoiceChoice("clone:marco", None)),
+        (None, {"voice": "clone:anna"}, {"voice": "x"}, VoiceChoice("clone:marco", None)),
+    ],
+)
+def test_role_voice_wins_over_configured_voices(role, phrases, summaries, expected):
+    settings = role_settings(phrases, summaries)
+    assert resolve_voice(settings, None, "it", role=role) == expected
+
+
+def test_explicit_request_voice_beats_the_role_voice():
+    settings = role_settings(summaries={"instructions": "male"})
+    assert resolve_voice(settings, "clone:zoe", "it", role="summary") == VoiceChoice(
+        "clone:zoe", None
+    )
+    assert resolve_voice(settings, None, "it", "child", role="summary") == VoiceChoice(
+        None, "child"
+    )
+
+
+async def test_speak_and_notify_use_the_role_voice(
+    service: VoxelloService, provider: FakeProvider, player: FakePlayer
+):
+    service.settings.integrations = IntegrationsSettings(
+        summaries={"voice": "clone:anna"}, phrases={"instructions": "child"}
+    )
+    await service.speak("Fatto.", play=False, role="summary")
+    await service.notify("Serve un permesso.", channels=["voice"], role="phrase", cache=False)
+    await player.wait_started()
+    assert [voice for _, voice, _ in provider.calls] == ["clone:anna", None]
+    assert provider.instructions == [None, "child"]
+
+
+async def test_summaries_are_not_cached_unless_asked(
+    service: VoxelloService, provider: FakeProvider, player: FakePlayer
+):
+    first = await service.notify("Ho finito.", channels=["voice"], role="summary")
+    await player.wait_started()
+    await player.finish_current()
+    second = await service.notify("Ho finito.", channels=["voice"], role="summary")
+    assert first.status == second.status == "delivered"
+    assert len(provider.calls) == 2  # never stored, so never a hit
+    assert service.audio_cache is not None and service.audio_cache.stats()[0] == 0
+
+    await service.notify("Ho finito.", channels=["voice"], role="summary", cache=True)
+    assert service.audio_cache.stats()[0] == 1  # an explicit request still caches
+
+
+async def test_phrases_keep_the_notification_cache_default(
+    service: VoxelloService, provider: FakeProvider, player: FakePlayer
+):
+    await service.notify("Serve un permesso.", channels=["voice"], role="phrase")
+    assert service.audio_cache is not None and service.audio_cache.stats()[0] == 1
