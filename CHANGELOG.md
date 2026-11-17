@@ -22,7 +22,8 @@ milestone 4), and cloned and designed voices (roadmap milestone 6).
   `voice update`, `voice delete` and `voice list` manage omnivoice-server profiles, used
   afterwards as `--voice clone:NAME`. `clone` asks to confirm the speaker's permission. New error
   codes `voice_exists`, `voice_cloning_unsupported` and `invalid_reference_audio`. Cached phrases
-  recorded with a voice are dropped when Voxello changes or deletes it.
+  recorded with a voice are dropped when Voxello changes or deletes it, also while
+  `cache.enabled` is false, so re-enabling the cache never replays the old voice.
 - The `notify` tool and `voxello notify` accept `voice`.
 - `voxello doctor` lists voice designs and cloned voices and warns when the server's voice-design
   vocabulary differs from Voxello's.
@@ -84,6 +85,8 @@ milestone 4), and cloned and designed voices (roadmap milestone 6).
   `voxello hook notification --language "$VOXELLO_HOOK_LANG" --channels "$VOXELLO_HOOK_CHANNELS"`.
   Adding a hook language means adding a message file. `voxello install claude --lang` accepts
   every language that has one. Re-run `voxello install claude` to update the installed copy.
+- `voxello cache list` and `cache clear` work while `cache.enabled` is false, on the files kept
+  from when it was on (with a note on stderr). `cache warm` still refuses.
 - `voxello cache warm --language` now also sets the TTS language of the warmed phrases, so the
   English hook sentences are cached under the key the hook will look up.
 - The `voice-notify` skill passes `language` consistent with the message text.

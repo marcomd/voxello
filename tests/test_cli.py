@@ -170,12 +170,46 @@ def test_cache_warm_rejects_bad_arguments(isolated_env: Path, capsys: pytest.Cap
     assert "No hook phrases for language 'xx'" in capsys.readouterr().err
 
 
-def test_cache_commands_report_disabled_cache(
+def seed_cache_entry(directory: Path, voice: str, text: str = "Fatto.") -> None:
+    """Store one cached phrase for ``voice`` the way a past ``speak`` would have."""
+    from voxello.storage.cache import AudioCache, CacheKeyParts
+
+    cache = AudioCache(directory, max_entries=20, max_age_days=30)
+    parts = CacheKeyParts(
+        text=text,
+        voice=voice,
+        engine="omnivoice",
+        language="it",
+        speed=None,
+        num_step=None,
+        guidance_scale=None,
+        base_url="http://127.0.0.1:8880",
+    )
+    cache.store(AudioCache.key(parts), make_wav(100), voice=voice, provider="fake", text_chars=6)
+
+
+def test_cache_warm_refuses_while_the_cache_is_disabled(
     isolated_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
     monkeypatch.setenv("VOXELLO_CACHE__ENABLED", "false")
-    assert main(["cache", "list"]) == 1
+    assert main(["cache", "warm", "--hook-phrases"]) == 1
     assert "disabled" in capsys.readouterr().err
+
+
+def test_cache_list_and_clear_reach_files_left_while_disabled(
+    isolated_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """Disabling the cache keeps its files; list and clear must still see and remove them."""
+    seed_cache_entry(isolated_env / "cache", "clone:marco")
+    monkeypatch.setenv("VOXELLO_CACHE__ENABLED", "false")
+    assert main(["cache", "list"]) == 0
+    captured = capsys.readouterr()
+    assert "voice=clone:marco" in captured.out and "1 entry" in captured.out
+    assert "disabled" in captured.err
+    assert main(["cache", "clear"]) == 0
+    assert capsys.readouterr().out.startswith("Removed 1 cached phrase ")
+    assert main(["cache", "list"]) == 0
+    assert "0 entries" in capsys.readouterr().out
 
 
 def test_cache_warm_uses_the_requested_language(isolated_env: Path, fake_service, capsys):
@@ -603,3 +637,30 @@ async def test_doctor_survives_an_unreadable_design_vocabulary(
     assert "  voice design: could not read the vocabulary (tts_provider_error)" in (
         capsys.readouterr().out
     )
+
+
+@pytest.mark.parametrize("command", ["update", "delete"])
+def test_voice_changes_evict_cached_audio_while_the_cache_is_disabled(
+    isolated_env: Path,
+    profile_store: FakeVoiceProfileStore,
+    reference: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+    command: str,
+):
+    """Re-enabling the cache must not replay a changed or deleted cloned voice."""
+    from voxello.storage.cache import AudioCache
+
+    assert main(["voice", "clone", "marco", str(reference), "-y"]) == 0
+    seed_cache_entry(isolated_env / "cache", "clone:marco")
+    seed_cache_entry(isolated_env / "cache", "nova")
+    capsys.readouterr()
+
+    monkeypatch.setenv("VOXELLO_CACHE__ENABLED", "false")
+    args = ["voice", "update", "marco", "--ref-text", "Ciao"]
+    if command == "delete":
+        args = ["voice", "delete", "marco", "--yes"]
+    assert main(args) == 0
+    assert "(1 cached phrase dropped)" in capsys.readouterr().out
+    cache = AudioCache(isolated_env / "cache", max_entries=20, max_age_days=30)
+    assert [entry.voice for entry in cache.entries()] == ["nova"]

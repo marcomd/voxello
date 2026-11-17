@@ -343,7 +343,9 @@ back as tool errors with a stable code: `tts_provider_unavailable`, `tts_provide
   SHA-256 of the text and synthesis parameters; the text itself is never written there. Only
   notifications (or explicit `cache: true`) up to 300 characters are cached, the least recently
   used entries are dropped beyond `cache.max_entries` or `cache.max_age_days`, and
-  `voxello cache clear` empties it. Set `cache.enabled: false` to keep every WAV short-lived.
+  `voxello cache clear` empties it. Set `cache.enabled: false` to keep every new WAV
+  short-lived; phrases cached earlier stay on disk until `voxello cache clear`, which works
+  either way.
 - **stdout is the protocol.** Logs go to stderr (and to `logging.file` if set).
 
 ## Troubleshooting

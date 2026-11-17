@@ -635,10 +635,16 @@ def _human_size(size: int) -> str:
 def cmd_cache(settings: Settings, args: argparse.Namespace) -> int:
     from voxello.core.service import VoxelloService
 
-    cache = VoxelloService.cache_from_settings(settings)
-    if cache is None:
-        print("The audio cache is disabled (cache.enabled: false).", file=sys.stderr)
-        return 1
+    if not settings.cache.enabled:
+        if args.cache_command == "warm":
+            print("The audio cache is disabled (cache.enabled: false).", file=sys.stderr)
+            return 1
+        print(
+            "note: the audio cache is disabled (cache.enabled: false); "
+            "its files from when it was on are still on disk.",
+            file=sys.stderr,
+        )
+    cache = VoxelloService.cache_files(settings)
     if args.cache_command == "list":
         entries = cache.entries()
         for entry in entries:
@@ -769,7 +775,9 @@ async def cmd_voice(settings: Settings, args: argparse.Namespace) -> int:
             return 1
 
     store = VoiceStudioProvider(settings.tts.voicestudio)
-    library = VoiceLibrary(store, VoxelloService.cache_from_settings(settings))
+    # Invalidate even while the cache is disabled: its files survive and would replay
+    # the old (or deleted) voice once it is re-enabled.
+    library = VoiceLibrary(store, VoxelloService.cache_files(settings))
     try:
         if args.voice_command == "list":
             profiles = await library.list()

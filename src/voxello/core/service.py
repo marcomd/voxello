@@ -137,6 +137,17 @@ class VoxelloService:
         """Build the audio cache described by ``settings.cache`` (``None`` when disabled)."""
         if not settings.cache.enabled:
             return None
+        return VoxelloService.cache_files(settings)
+
+    @staticmethod
+    def cache_files(settings: Settings) -> AudioCache:
+        """The cache directory as a handle, whether or not speech may use it.
+
+        ``cache.enabled: false`` only stops reads and writes during speech; files stored
+        earlier stay on disk and come back into use when the cache is re-enabled. Anything
+        that inspects or invalidates them (``cache list|clear``, cloned-voice changes) must
+        use this handle so they are not left stale.
+        """
         return AudioCache(
             settings.cache.resolved_directory(),
             max_entries=settings.cache.max_entries,
