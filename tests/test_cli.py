@@ -12,7 +12,7 @@ from voxello.config import Settings, describe_config_path
 from voxello.errors import INVALID_LANGUAGE, TTS_PROVIDER_ERROR, VoxelloError
 from voxello.tts.base import VoiceInfo
 
-from .conftest import FakeProvider
+from .conftest import FakeProvider, FakeVoiceProfileStore, make_wav
 
 
 def test_version_flag(capsys: pytest.CaptureFixture[str]):
@@ -419,3 +419,171 @@ def test_doctor_flags_are_wired_through_main(
     assert "synthesis: ok" in capsys.readouterr().out
     assert main(["doctor", "-l", "italiano"]) == 1
     assert "invalid_language" in capsys.readouterr().err
+
+
+# -- voice design and cloned voices ----------------------------------------------------------
+
+
+def test_speak_and_notify_accept_instructions_and_voice(isolated_env: Path, fake_service, capsys):
+    assert main(["speak", "Hi", "--no-play", "-l", "en", "-i", "Female, Whisper"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["instructions"] == "female, whisper"
+    assert fake_service.instructions[-1] == "female, whisper"
+    assert main(["notify", "Done", "--channels", "file", "--instructions", "child"]) == 0
+    assert fake_service.instructions[-1] == "child"
+    assert main(["notify", "Done", "--channels", "file", "--voice", "clone:marco"]) == 0
+    assert fake_service.calls[-1] == ("Done", "clone:marco", "it")
+    capsys.readouterr()
+    assert main(["speak", "Hi", "--no-play", "-i", "robot"]) == 1
+    assert "invalid_instructions" in capsys.readouterr().err
+    assert main(["speak", "Hi", "--no-play", "-i", "male", "--voice", "nova"]) == 1
+    assert "invalid_parameter" in capsys.readouterr().err
+
+
+def test_cache_warm_with_instructions(isolated_env: Path, fake_service, capsys):
+    phrases = isolated_env / "phrases.txt"
+    phrases.write_text("Fatto.\n")
+    assert main(["cache", "warm", str(phrases), "--instructions", "male, elderly"]) == 0
+    assert fake_service.instructions == ["male, elderly"]
+    assert "voice=design:male, elderly" in (main(["cache", "list"]), capsys.readouterr().out)[1]
+
+
+@pytest.fixture
+def profile_store(monkeypatch: pytest.MonkeyPatch) -> FakeVoiceProfileStore:
+    import voxello.tts.voicestudio as voicestudio
+
+    store = FakeVoiceProfileStore()
+    monkeypatch.setattr(voicestudio, "VoiceStudioProvider", lambda _settings: store)
+    return store
+
+
+@pytest.fixture
+def reference(isolated_env: Path) -> Path:
+    path = isolated_env / "marco.wav"
+    path.write_bytes(make_wav(5000))
+    return path
+
+
+def test_voice_clone_list_update_delete(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, reference: Path, capsys
+):
+    args = ["voice", "clone", "marco", str(reference), "--ref-text", "Ciao", "--yes"]
+    assert main(args) == 0
+    out = capsys.readouterr().out
+    assert "Cloned voice 'marco' created" in out
+    assert "--voice clone:marco" in out
+    assert profile_store.profiles["marco"][2] == "Ciao"
+    assert profile_store.closed is True
+
+    assert main(["voice", "list"]) == 0
+    out = capsys.readouterr().out
+    assert "clone:marco" in out and "Ciao" in out
+
+    assert main(["voice", "update", "marco", "--ref-text", "Ciao a tutti"]) == 0
+    assert profile_store.profiles["marco"][2] == "Ciao a tutti"
+    assert "updated" in capsys.readouterr().out
+
+    assert main(["voice", "delete", "clone:marco", "--yes"]) == 0
+    assert profile_store.profiles == {}
+    assert "deleted" in capsys.readouterr().out
+
+
+def test_voice_clone_needs_consent(
+    isolated_env: Path,
+    profile_store: FakeVoiceProfileStore,
+    reference: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+):
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    assert main(["voice", "clone", "marco", str(reference)]) == 1
+    assert "--yes" in capsys.readouterr().err
+    assert profile_store.profiles == {}
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+    assert main(["voice", "clone", "marco", str(reference)]) == 1
+    assert profile_store.profiles == {}
+    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+    assert main(["voice", "clone", "marco", str(reference)]) == 0
+    assert "marco" in profile_store.profiles
+
+
+def test_voice_delete_needs_confirmation(
+    isolated_env: Path,
+    profile_store: FakeVoiceProfileStore,
+    reference: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+):
+    assert main(["voice", "clone", "marco", str(reference), "-y"]) == 0
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    assert main(["voice", "delete", "marco"]) == 1
+    assert "marco" in profile_store.profiles
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "yes")
+    assert main(["voice", "delete", "marco"]) == 0
+    assert profile_store.profiles == {}
+
+
+def test_voice_clone_warns_about_duration_and_reports_errors(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, capsys
+):
+    short = isolated_env / "short.wav"
+    short.write_bytes(make_wav(1000))
+    assert main(["voice", "clone", "marco", str(short), "-y"]) == 0
+    assert "warning: The reference audio lasts 1.0 s" in capsys.readouterr().err
+    assert main(["voice", "clone", "marco", str(short), "-y"]) == 1
+    assert "voice_exists" in capsys.readouterr().err
+    assert main(["voice", "clone", "marco", str(short), "-y", "--overwrite"]) == 0
+    assert main(["voice", "clone", "bad name", str(short), "-y"]) == 1
+    assert "invalid_parameter" in capsys.readouterr().err
+    assert main(["voice", "update", "marco"]) == 1
+    assert "Nothing to update" in capsys.readouterr().err
+
+
+def test_voice_list_shows_designs_even_when_the_server_is_down(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, monkeypatch, capsys
+):
+    from voxello.errors import TTS_PROVIDER_UNAVAILABLE
+
+    cfg = isolated_env / "config.yaml"
+    cfg.write_text('speech:\n  voice_designs:\n    narrator: "Female, High Pitch"\n')
+    monkeypatch.setenv("VOXELLO_CONFIG", str(cfg))
+    profile_store.fail_with = VoxelloError(TTS_PROVIDER_UNAVAILABLE, "down")
+    assert main(["voice", "list"]) == 1
+    captured = capsys.readouterr()
+    assert "narrator" in captured.out and "female, high pitch" in captured.out
+    assert "tts_provider_unavailable" in captured.err
+    profile_store.fail_with = None
+    assert main(["voice", "list"]) == 0
+    assert "No cloned voices" in capsys.readouterr().out
+
+
+async def test_doctor_reports_designs_clones_and_vocabulary_drift(
+    doctor_settings: Settings, doctor_provider: FakeProvider, capsys: pytest.CaptureFixture[str]
+):
+    from voxello.core.voice_design import VOICE_DESIGN_ATTRIBUTES
+
+    doctor_settings.speech.voice_designs = {"narrator": "female, high pitch"}
+    doctor_settings.speech.voices_by_language = {"en": "narrator", "it": "clone:marco"}
+    doctor_provider.voices = [
+        VoiceInfo("auto", kind="auto"),
+        VoiceInfo("clone:marco", kind="clone"),
+    ]
+    attributes = {k: sorted(v) for k, v in VOICE_DESIGN_ATTRIBUTES.items()}
+    doctor_provider.attributes = attributes
+    await cmd_doctor(doctor_settings, None, provider=doctor_provider)
+    lines = capsys.readouterr().out.splitlines()
+    assert '  voice_designs: narrator="female, high pitch"' in lines
+    assert "  cloned voices: 1 (clone:marco)" in lines
+    assert "    voices_by_language[en]=narrator: voice design (config)" in lines
+    assert "    voices_by_language[it]=clone:marco: found" in lines
+    assert "  voice design: vocabulary matches the server" in lines
+
+    attributes = {**attributes, "style": ["whisper", "shout"], "gender": ["female"]}
+    doctor_provider.attributes = attributes
+    await cmd_doctor(doctor_settings, None, provider=doctor_provider)
+    out = capsys.readouterr().out
+    assert "WARNING the server accepts style 'shout'" in out
+    assert "WARNING the server no longer lists gender 'male'" in out
