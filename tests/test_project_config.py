@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -100,7 +101,7 @@ def test_no_project_file(tmp_path: Path):
 
 def test_invalid_project_file_names_it(tmp_path: Path):
     root = project(tmp_path / "home" / "alfa", "- just\n- a list\n")
-    with pytest.raises(ValueError, match=str(root / PROJECT_CONFIG_NAME)):
+    with pytest.raises(ValueError, match=re.escape(str(root / PROJECT_CONFIG_NAME))):
         load_project_config(root)
 
 
