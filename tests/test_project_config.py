@@ -19,7 +19,9 @@ from voxello.config import (
 def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     for var in ("VOXELLO_PROJECT_DIR", "CLAUDE_PROJECT_DIR", "VOXELLO_CONFIG", "VOXELLO_LANGUAGE"):
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    # Path.home() reads HOME on POSIX but USERPROFILE on Windows: patch it directly.
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
 
 
 def project(root: Path, text: str, *, git: bool = True) -> Path:
