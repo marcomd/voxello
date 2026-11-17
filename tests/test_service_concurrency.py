@@ -24,9 +24,14 @@ class GatedProvider(FakeProvider):
         self.entered = asyncio.Event()
 
     async def synthesize(
-        self, text: str, voice: str | None = None, language: str | None = None
+        self,
+        text: str,
+        voice: str | None = None,
+        language: str | None = None,
+        instructions: str | None = None,
     ) -> SynthesisResult:
         self.calls.append((text, voice, language))
+        self.instructions.append(instructions)
         self.entered.set()
         await self.gate.wait()
         return SynthesisResult(make_wav(self.duration_ms), "audio/wav", self.name, "default")

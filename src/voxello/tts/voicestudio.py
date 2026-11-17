@@ -14,26 +14,37 @@ exponential backoff starting at ``retry_backoff_seconds``, when the connection f
 (typical while the model is still loading). A 4xx is the caller's problem and is never
 retried. A read timeout is not retried either: the server accepted the request and is just
 slow, and a second attempt would double the time the service holds its synthesis lock.
+
+Voice design and cloning (omnivoice-server only): ``instructions`` carries canonical
+voice-design attributes on the synthesis request; cloned voices are server-side profiles under
+``/v1/voices/profiles`` (multipart upload of the reference audio) used afterwards as
+``voice="clone:<id>"``. Profile requests are never retried: a create is not idempotent and
+the caller is a person at the CLI who can simply run it again. VoiceStudio exposes neither
+(its design field is ``instruct``), which surfaces as ``voice_cloning_unsupported``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import mimetypes
 from typing import Any
 
 import httpx2
 
 from voxello.config import VoiceStudioSettings
 from voxello.errors import (
+    INVALID_INSTRUCTIONS,
     TTS_PROVIDER_ERROR,
     TTS_PROVIDER_UNAUTHORIZED,
     TTS_PROVIDER_UNAVAILABLE,
+    VOICE_CLONING_UNSUPPORTED,
+    VOICE_EXISTS,
     VOICE_NOT_FOUND,
     VoxelloError,
 )
 from voxello.storage.wav import is_wav
-from voxello.tts.base import ProviderHealth, SynthesisResult, VoiceInfo
+from voxello.tts.base import ProviderHealth, SynthesisResult, VoiceInfo, VoiceProfile
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +52,7 @@ SPEECH_PATH = "/v1/audio/speech"
 HEALTH_PATH = "/health"
 VOICES_PATHS = ("/v1/audio/voices", "/v1/voices")  # VoiceStudio, then omnivoice-server
 ENGINES_PATHS = ("/engines/tts", "/v1/models")
+PROFILES_PATH = "/v1/voices/profiles"  # omnivoice-server cloned voices
 DEFAULT_VOICE_LABEL = "server-default"
 MAX_INPUT_CHARS = 4096  # hard limit of the VoiceStudio SpeechRequest schema
 RETRIABLE_STATUSES = frozenset({502, 503, 504})
@@ -72,7 +84,13 @@ class VoiceStudioProvider:
     def base_url(self) -> str:
         return self.settings.base_url
 
-    def _payload(self, text: str, voice: str | None, language: str | None = None) -> dict[str, Any]:
+    def _payload(
+        self,
+        text: str,
+        voice: str | None,
+        language: str | None = None,
+        instructions: str | None = None,
+    ) -> dict[str, Any]:
         s = self.settings
         payload: dict[str, Any] = {
             "input": text,
@@ -80,7 +98,10 @@ class VoiceStudioProvider:
             "response_format": "wav",
         }
         optional = {
-            "voice": voice or s.voice,
+            # A configured voice would win over the design on the server (profiles beat
+            # instructions), so it is only a fallback when no design is requested.
+            "voice": voice or (None if instructions else s.voice),
+            "instructions": instructions,
             # The request language wins; the deprecated tts.voicestudio.language is the last
             # fallback for callers that bypass the service (roadmap 3.1).
             "language": language if language is not None else s.language,
@@ -92,16 +113,22 @@ class VoiceStudioProvider:
         return payload
 
     async def synthesize(
-        self, text: str, voice: str | None = None, language: str | None = None
+        self,
+        text: str,
+        voice: str | None = None,
+        language: str | None = None,
+        instructions: str | None = None,
     ) -> SynthesisResult:
         if len(text) > MAX_INPUT_CHARS:
             raise VoxelloError(
                 TTS_PROVIDER_ERROR, f"VoiceStudio accepts at most {MAX_INPUT_CHARS} characters."
             )
-        payload = self._payload(text, voice, language)
+        payload = self._payload(text, voice, language, instructions)
         response = await self._post_speech(payload)
 
-        voice_label = payload.get("voice", DEFAULT_VOICE_LABEL)
+        voice_label = payload.get("voice") or (
+            f"design:{instructions}" if instructions else DEFAULT_VOICE_LABEL
+        )
         content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
         body = response.content
         if not body:
@@ -145,7 +172,9 @@ class VoiceStudioProvider:
             else:
                 if response.status_code == 200:
                     return response
-                error = self._status_error(response, payload.get("voice"))
+                error = self._status_error(
+                    response, payload.get("voice"), payload.get("instructions")
+                )
                 error.details["attempts"] = attempt
                 if response.status_code not in RETRIABLE_STATUSES:
                     raise error
@@ -184,9 +213,116 @@ class VoiceStudioProvider:
                             or item.get("display_name")
                             or item.get("description"),
                             language=item.get("language"),
+                            kind=item.get("type"),
                         )
                     )
         return voices
+
+    async def design_attributes(self) -> dict[str, list[str]] | None:
+        """The voice-design vocabulary the server publishes, or ``None`` if it has none."""
+        data = await self._get_json_first(VOICES_PATHS)
+        attributes = data.get("design_attributes") if isinstance(data, dict) else None
+        if not isinstance(attributes, dict):
+            return None
+        return {
+            str(category): [str(v) for v in values]
+            for category, values in attributes.items()
+            if isinstance(values, list)
+        }
+
+    # -- cloned voices (omnivoice-server profiles) -------------------------------
+
+    async def list_voice_profiles(self) -> list[VoiceProfile]:
+        data = await self._get_json_first(VOICES_PATHS)
+        items = data.get("voices") if isinstance(data, dict) else data
+        profiles: list[VoiceProfile] = []
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict) or item.get("type") != "clone":
+                continue
+            profile_id = item.get("profile_id") or str(item.get("id", "")).removeprefix("clone:")
+            if profile_id:
+                profiles.append(
+                    VoiceProfile(str(profile_id), item.get("ref_text"), item.get("created_at"))
+                )
+        return profiles
+
+    async def create_voice_profile(
+        self,
+        profile_id: str,
+        audio: bytes,
+        filename: str,
+        *,
+        ref_text: str | None = None,
+        overwrite: bool = False,
+    ) -> VoiceProfile:
+        data = {"profile_id": profile_id, "overwrite": "true" if overwrite else "false"}
+        if ref_text is not None:
+            data["ref_text"] = ref_text
+        response = await self._profile_request(
+            "POST", PROFILES_PATH, profile_id, data=data, files=_audio_file(audio, filename)
+        )
+        return _parse_profile(response, profile_id)
+
+    async def update_voice_profile(
+        self,
+        profile_id: str,
+        *,
+        audio: bytes | None = None,
+        filename: str | None = None,
+        ref_text: str | None = None,
+    ) -> VoiceProfile:
+        if audio is None and ref_text is None:
+            raise ValueError("nothing to update: pass audio, ref_text or both")
+        data = {"ref_text": ref_text} if ref_text is not None else None
+        files = _audio_file(audio, filename or "ref_audio.wav") if audio is not None else None
+        response = await self._profile_request(
+            "PATCH", f"{PROFILES_PATH}/{profile_id}", profile_id, data=data, files=files
+        )
+        return _parse_profile(response, profile_id)
+
+    async def delete_voice_profile(self, profile_id: str) -> None:
+        await self._profile_request("DELETE", f"{PROFILES_PATH}/{profile_id}", profile_id)
+
+    async def _profile_request(
+        self,
+        method: str,
+        path: str,
+        profile_id: str,
+        *,
+        data: dict[str, str] | None = None,
+        files: dict[str, tuple[str, bytes, str]] | None = None,
+    ) -> httpx2.Response:
+        try:
+            response = await self._client.request(method, path, data=data, files=files)
+        except (httpx2.NetworkError, httpx2.TimeoutException) as exc:
+            raise self._unavailable(exc) from exc
+        except httpx2.HTTPError as exc:
+            raise VoxelloError(TTS_PROVIDER_ERROR, f"Voice profile request failed: {exc}") from exc
+        code = response.status_code
+        if code in (200, 201, 204):
+            return response
+        if _route_missing(response):
+            raise VoxelloError(
+                VOICE_CLONING_UNSUPPORTED,
+                f"The TTS server at {self.base_url} has no voice-profile API ({PROFILES_PATH}); "
+                "cloned voices need omnivoice-server.",
+                details={"http_status": code},
+            )
+        if code == 404:
+            raise VoxelloError(
+                VOICE_NOT_FOUND,
+                f"There is no cloned voice '{profile_id}' on the TTS server: "
+                f"{_extract_detail(response)}",
+                details={"http_status": code},
+            )
+        if code == 409:
+            raise VoxelloError(
+                VOICE_EXISTS,
+                f"A cloned voice named '{profile_id}' already exists on the TTS server; "
+                "use overwrite to replace it.",
+                details={"http_status": code},
+            )
+        raise self._status_error(response, None)
 
     async def list_engines(self) -> list[str]:
         data = await self._get_json_first(ENGINES_PATHS)
@@ -278,7 +414,9 @@ class VoiceStudioProvider:
             details={"reason": type(exc).__name__},
         )
 
-    def _status_error(self, response: httpx2.Response, voice: str | None) -> VoxelloError:
+    def _status_error(
+        self, response: httpx2.Response, voice: str | None, instructions: str | None = None
+    ) -> VoxelloError:
         code = response.status_code
         detail = _extract_detail(response)
         if code in (401, 403):
@@ -286,6 +424,14 @@ class VoiceStudioProvider:
                 TTS_PROVIDER_UNAUTHORIZED,
                 "The TTS server rejected the request: an API key is required for remote access "
                 "(set tts.voicestudio.api_key).",
+                details={"http_status": code},
+            )
+        if code == 404 and voice and not _route_missing(response):
+            # omnivoice-server answers 404 for an unknown `clone:<id>` voice.
+            return VoxelloError(
+                VOICE_NOT_FOUND,
+                f"The requested voice '{voice}' is not available: {detail} "
+                "(create cloned voices with `voxello voice clone NAME FILE`).",
                 details={"http_status": code},
             )
         if code == 404:
@@ -297,6 +443,12 @@ class VoiceStudioProvider:
             )
         if code in (400, 422):
             lowered = detail.lower()
+            if instructions and ("attribute" in lowered or "instruction" in lowered):
+                return VoxelloError(
+                    INVALID_INSTRUCTIONS,
+                    f"The TTS server rejected the voice design '{instructions}': {detail}",
+                    details={"http_status": code},
+                )
             if voice and ("voice" in lowered or "profile" in lowered):
                 return VoxelloError(
                     VOICE_NOT_FOUND,
@@ -319,6 +471,39 @@ class VoiceStudioProvider:
             f"The TTS server returned HTTP {code}: {detail}",
             details={"http_status": code},
         )
+
+
+def _route_missing(response: httpx2.Response) -> bool:
+    """True when the server lacks the route itself (FastAPI's bare 404/405), not a resource."""
+    if response.status_code == 405:
+        return True
+    if response.status_code != 404:
+        return False
+    try:
+        body = response.json()
+    except ValueError:
+        return True
+    return isinstance(body, dict) and body.get("detail") == "Not Found"
+
+
+def _audio_file(audio: bytes, filename: str) -> dict[str, tuple[str, bytes, str]]:
+    mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    return {"ref_audio": (filename, audio, mime)}
+
+
+def _parse_profile(response: httpx2.Response, profile_id: str) -> VoiceProfile:
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        raise VoxelloError(
+            TTS_PROVIDER_ERROR,
+            f"The TTS server did not describe the cloned voice '{profile_id}' (no JSON body).",
+        )
+    return VoiceProfile(
+        str(body.get("profile_id") or profile_id), body.get("ref_text"), body.get("created_at")
+    )
 
 
 def _extract_detail(response: httpx2.Response) -> str:

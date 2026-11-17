@@ -47,22 +47,27 @@ class FakeProvider:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str | None, str | None]] = []
+        self.instructions: list[str | None] = []  # kept apart so `calls` stays a 3-tuple
         self.fail_with: VoxelloError | None = None
         self.duration_ms = 500
         self.delay = 0.0
         self.voices: list[VoiceInfo] = [VoiceInfo("default", "Default")]
 
     async def synthesize(
-        self, text: str, voice: str | None = None, language: str | None = None
+        self,
+        text: str,
+        voice: str | None = None,
+        language: str | None = None,
+        instructions: str | None = None,
     ) -> SynthesisResult:
         self.calls.append((text, voice, language))
+        self.instructions.append(instructions)
         if self.delay:
             await asyncio.sleep(self.delay)
         if self.fail_with is not None:
             raise self.fail_with
-        return SynthesisResult(
-            make_wav(self.duration_ms), "audio/wav", self.name, voice or "default"
-        )
+        label = voice or (f"design:{instructions}" if instructions else "default")
+        return SynthesisResult(make_wav(self.duration_ms), "audio/wav", self.name, label)
 
     async def list_voices(self) -> list[VoiceInfo]:
         return list(self.voices)

@@ -369,10 +369,10 @@ async def _doctor_synth(provider: TTSProvider, settings: Settings, language: str
     from voxello.storage.wav import wav_duration_ms
 
     text = SAMPLE_PHRASES.get(language, SAMPLE_PHRASES["en"])
-    voice = resolve_voice(settings, None, language)
+    choice = resolve_voice(settings, None, language)
     started = time.perf_counter()
     try:
-        result = await provider.synthesize(text, voice, language)
+        result = await provider.synthesize(text, choice.voice, language, choice.instructions)
     except VoxelloError as exc:
         print(f"  synthesis: ERROR - {exc.code}: {exc.message}")
         return False
