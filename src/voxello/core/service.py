@@ -24,7 +24,9 @@ from voxello.core.models import (
     StatusReport,
     StopResult,
     TTSHealth,
+    VoiceChoice,
 )
+from voxello.core.voice_design import normalize_instructions
 from voxello.errors import (
     INVALID_LANGUAGE,
     INVALID_PARAMETER,
@@ -135,6 +137,17 @@ class VoxelloService:
         """Build the audio cache described by ``settings.cache`` (``None`` when disabled)."""
         if not settings.cache.enabled:
             return None
+        return VoxelloService.cache_files(settings)
+
+    @staticmethod
+    def cache_files(settings: Settings) -> AudioCache:
+        """The cache directory as a handle, whether or not speech may use it.
+
+        ``cache.enabled: false`` only stops reads and writes during speech; files stored
+        earlier stay on disk and come back into use when the cache is re-enabled. Anything
+        that inspects or invalidates them (``cache list|clear``, cloned-voice changes) must
+        use this handle so they are not left stale.
+        """
         return AudioCache(
             settings.cache.resolved_directory(),
             max_entries=settings.cache.max_entries,
@@ -193,6 +206,7 @@ class VoxelloService:
         client_id: str | None = None,
         cache: bool | None = None,
         language: str | None = None,
+        instructions: str | None = None,
     ) -> SpeechResult:
         request_id = new_request_id()
         record = RequestRecord(
@@ -211,9 +225,11 @@ class VoxelloService:
             text = self._validate_text(text)
             language = self._validate_language(language)
             record.language = language
-            # The effective voice is fixed here (roadmap 3.2 precedence) so the provider and
-            # the cache key see the same value.
-            voice = self._resolve_voice(self._validate_voice(voice), language)
+            # The effective voice is fixed here (roadmap 3.2 precedence, then named voice
+            # designs) so the provider and the cache key see the same value.
+            choice = self._resolve_voice(self._validate_voice(voice), language, instructions)
+            voice = choice.voice
+            record.instructions = choice.instructions
             if play and self.playback is None:
                 raise VoxelloError(
                     PLAYBACK_UNAVAILABLE, "No supported local audio player was detected."
@@ -222,11 +238,12 @@ class VoxelloService:
             record.set_state(RequestState.GENERATING)
             described = describe_text(text, self.settings.logging.log_text)
             log.info(
-                "speak %s: %s voice=%s language=%s mode=%s interrupt=%s play=%s save=%s "
-                "cache=%s client=%s",
+                "speak %s: %s voice=%s instructions=%s language=%s mode=%s interrupt=%s "
+                "play=%s save=%s cache=%s client=%s",
                 request_id,
                 described,
                 voice or "server-default",
+                choice.instructions,
                 language,
                 mode,
                 interrupt,
@@ -239,7 +256,7 @@ class VoxelloService:
             # Cache lookup happens before the synthesis lock so hits never wait on the TTS
             # server (roadmap 2.2). The cache only ever holds short, repeatable phrases.
             cache_key = (
-                self._cache_key(text, voice, language)
+                self._cache_key(text, choice, language)
                 if self._cache_allowed(text, mode, cache)
                 else None
             )
@@ -265,7 +282,9 @@ class VoxelloService:
                 self._generating += 1
                 try:
                     async with self._synth_lock:
-                        synthesis = await self.provider.synthesize(text, voice, language)
+                        synthesis = await self.provider.synthesize(
+                            text, voice, language, choice.instructions
+                        )
                 finally:
                     self._generating -= 1
                 generation_ms = round((time.monotonic() - started) * 1000)
@@ -323,6 +342,7 @@ class VoxelloService:
                 voice=record.voice or "server-default",
                 language=language,
                 cached=record.cached,
+                instructions=record.instructions,
             )
         except VoxelloError as exc:
             record.error = exc.code
@@ -414,6 +434,8 @@ class VoxelloService:
         client_id: str | None = None,
         cache: bool | None = None,
         language: str | None = None,
+        voice: str | None = None,
+        instructions: str | None = None,
     ) -> NotifyResult:
         channels = channels or ["voice", "desktop"]
         for channel in channels:
@@ -446,6 +468,8 @@ class VoxelloService:
                     client_id=client_id,
                     cache=cache,
                     language=language,
+                    voice=voice,
+                    instructions=instructions,
                 )
                 request_id = speech.request_id
                 saved_path = speech.saved_path
@@ -521,8 +545,10 @@ class VoxelloService:
         """Effective ISO 639-1 code (roadmap 3.1): the request's, else the configured default."""
         return normalize_language(language, self.settings.speech.default_language)
 
-    def _resolve_voice(self, voice: str | None, language: str) -> str | None:
-        return resolve_voice(self.settings, voice, language)
+    def _resolve_voice(
+        self, voice: str | None, language: str, instructions: str | None
+    ) -> VoiceChoice:
+        return resolve_voice(self.settings, voice, language, instructions)
 
     def _cache_allowed(self, text: str, mode: SpeechMode, cache: bool | None) -> bool:
         """Cache policy (roadmap 2.2): notifications by default, anything on request,
@@ -534,13 +560,14 @@ class VoxelloService:
         bounds = self.settings.cache
         return bounds.min_text_chars <= len(text) <= bounds.max_text_chars
 
-    def _cache_key(self, text: str, voice: str | None, language: str) -> str:
-        """``voice`` and ``language`` are the effective request values, already resolved."""
+    def _cache_key(self, text: str, choice: VoiceChoice, language: str) -> str:
+        """``choice`` and ``language`` are the effective request values, already resolved."""
         vs = self.settings.tts.voicestudio
         return AudioCache.key(
             CacheKeyParts(
                 text=text,
-                voice=voice,
+                voice=choice.voice,
+                instructions=choice.instructions,
                 engine=vs.engine,
                 language=language,
                 speed=vs.speed,
@@ -598,16 +625,33 @@ def normalize_language(language: str | None, default: str) -> str:
     return normalized
 
 
-def resolve_voice(settings: Settings, voice: str | None, language: str) -> str | None:
-    """Voice precedence (roadmap 3.2): request voice, then ``speech.voices_by_language``, then
-    the global ``tts.voicestudio.voice``; ``None`` leaves the choice to the server.
+def resolve_voice(
+    settings: Settings, voice: str | None, language: str, instructions: str | None = None
+) -> VoiceChoice:
+    """Effective voice of a request.
+
+    Explicit ``instructions`` win and bypass every configured voice; combining them with an
+    explicit ``voice`` is an error, because the server would ignore the design for a cloned
+    voice and override a preset. Otherwise the voice precedence of roadmap 3.2 applies
+    (request voice, ``speech.voices_by_language``, global ``tts.voicestudio.voice``) and a
+    result naming an entry of ``speech.voice_designs`` becomes those instructions. Neither
+    leaves the choice to the server.
 
     The service fixes the voice once with this function so the provider call and the cache
     key agree; ``doctor --synth`` uses it to test the voice a request would really get.
     """
-    if voice:
-        return voice
-    mapped = settings.speech.voices_by_language.get(language)
-    if mapped:
-        return mapped
-    return settings.tts.voicestudio.voice
+    if instructions is not None:
+        if voice:
+            raise VoxelloError(
+                INVALID_PARAMETER,
+                "Pass either `voice` or `instructions`, not both: a cloned voice ignores the "
+                "design and a design overrides a preset.",
+            )
+        return VoiceChoice(None, normalize_instructions(instructions))
+    candidate = (
+        voice or settings.speech.voices_by_language.get(language) or settings.tts.voicestudio.voice
+    )
+    design = settings.speech.voice_designs.get(candidate) if candidate else None
+    if design is not None:
+        return VoiceChoice(None, design)
+    return VoiceChoice(candidate, None)

@@ -3,7 +3,8 @@
 ``voxello`` (or ``voxello serve``) runs the MCP server over stdio. The other
 subcommands are for humans: ``doctor`` checks the setup, ``speak`` does a full
 round trip without an agent, ``config`` manages the config file, ``cache`` inspects
-and pre-fills the audio cache, ``install claude`` sets up the Claude Code skill and hook.
+and pre-fills the audio cache, ``voice`` manages cloned voices and lists voice designs,
+``install claude`` sets up the Claude Code skill and hook.
 """
 
 from __future__ import annotations
@@ -31,6 +32,11 @@ from voxello.logging_setup import configure_logging
 from voxello.tts.base import TTSProvider, VoiceInfo
 
 log = logging.getLogger(__name__)
+
+INSTRUCTIONS_HELP = (
+    "OmniVoice voice design instead of a voice, e.g. 'female, young adult, high pitch' "
+    "(gender, age, pitch, whisper, English accent); see `voxello voice list`"
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -65,7 +71,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     speak = sub.add_parser("speak", help="Synthesize and play text without an agent")
     speak.add_argument("text", help="Text to speak")
-    speak.add_argument("--voice", default=None)
+    speak.add_argument(
+        "--voice",
+        default=None,
+        help="Voice id, clone:<name>, or a name from speech.voice_designs",
+    )
+    speak.add_argument("--instructions", "-i", default=None, help=INSTRUCTIONS_HELP)
     speak.add_argument(
         "--language",
         "-l",
@@ -99,6 +110,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="ISO 639-1 code of the message (default: speech.default_language)",
     )
+    notify.add_argument(
+        "--voice",
+        default=None,
+        help="Voice id, clone:<name>, or a name from speech.voice_designs",
+    )
+    notify.add_argument("--instructions", "-i", default=None, help=INSTRUCTIONS_HELP)
 
     hook = sub.add_parser(
         "hook", help="Entry points for editor hooks (used by the Claude Code hook script)"
@@ -159,6 +176,47 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     warm.add_argument("--voice", default=None, help="Voice id; omit for the configured default")
+    warm.add_argument("--instructions", "-i", default=None, help=INSTRUCTIONS_HELP)
+
+    voice = sub.add_parser(
+        "voice",
+        help="Manage cloned voices on the TTS server and list voice designs",
+        description=(
+            "Cloned voices are profiles stored on omnivoice-server (/v1/voices/profiles) and "
+            "used afterwards as --voice clone:<name>, in the config or by agents. Clone only "
+            "voices whose owner has given permission. Voice designs are named attribute sets "
+            "in speech.voice_designs."
+        ),
+    )
+    voice_sub = voice.add_subparsers(dest="voice_command", required=True)
+    voice_sub.add_parser("list", help="List cloned voices on the server and configured designs")
+    clone = voice_sub.add_parser(
+        "clone",
+        help="Clone a voice from a 3-10 s reference recording",
+        description=(
+            "Uploads the reference recording to the TTS server as profile NAME. Pass the words "
+            "spoken in it with --ref-text; without it the server transcribes the recording "
+            "with Whisper. Asks you to confirm you have the speaker's permission unless --yes."
+        ),
+    )
+    clone.add_argument("name", help="Profile name: letters, digits, '-' or '_' (max 64)")
+    clone.add_argument("audio", type=Path, help="Reference recording (WAV recommended)")
+    clone.add_argument("--ref-text", default=None, help="Transcript of the reference recording")
+    clone.add_argument(
+        "--overwrite", action="store_true", help="Replace an existing profile with that name"
+    )
+    clone.add_argument(
+        "--yes", "-y", action="store_true", help="Confirm the speaker's permission without asking"
+    )
+    update = voice_sub.add_parser(
+        "update", help="Replace the reference recording or transcript of a cloned voice"
+    )
+    update.add_argument("name")
+    update.add_argument("--audio", type=Path, default=None, help="New reference recording")
+    update.add_argument("--ref-text", default=None, help="New transcript")
+    delete = voice_sub.add_parser("delete", help="Delete a cloned voice from the TTS server")
+    delete.add_argument("name")
+    delete.add_argument("--yes", "-y", action="store_true", help="Delete without asking")
 
     config = sub.add_parser("config", help="Manage the configuration file")
     config_sub = config.add_subparsers(dest="config_command", required=True)
@@ -226,6 +284,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_config(args)
         if command == "cache":
             return cmd_cache(_load(args), args)
+        if command == "voice":
+            return asyncio.run(cmd_voice(_load(args), args))
         if command == "install":
             return cmd_install(args)
     except VoxelloError as exc:
@@ -302,6 +362,15 @@ async def cmd_doctor(
             else:
                 for line in describe_voices(voices, settings):
                     print(line)
+            fetch_attributes = getattr(provider, "design_attributes", None)
+            if fetch_attributes is not None:
+                try:
+                    attributes = await fetch_attributes()
+                except VoxelloError as exc:
+                    print(f"  voice design: could not read the vocabulary ({exc.code})")
+                else:
+                    for line in describe_design_attributes(attributes):
+                        print(line)
             if synth:
                 ok = await _doctor_synth(provider, settings, language) and ok
         else:
@@ -348,8 +417,12 @@ def describe_voices(voices: list[VoiceInfo], settings: Settings) -> list[str]:
             shown = ", ".join(ids[:VOICES_PER_LINE])
             more = f" (+{len(ids) - VOICES_PER_LINE} more)" if len(ids) > VOICES_PER_LINE else ""
             lines.append(f"    {lang}: {shown}{more}")
+    clones = [v.id for v in voices if v.kind == "clone"]
+    if clones:
+        lines.append(f"  cloned voices: {len(clones)} ({', '.join(clones[:VOICES_PER_LINE])})")
     # Also when the list is empty: every configured id is then absent, which is worth a warning.
     known = {v.id for v in voices}
+    designs = settings.speech.voice_designs
     configured = [
         (f"voices_by_language[{lang}]", voice)
         for lang, voice in sorted(settings.speech.voices_by_language.items())
@@ -357,9 +430,37 @@ def describe_voices(voices: list[VoiceInfo], settings: Settings) -> list[str]:
     if settings.tts.voicestudio.voice:
         configured.append(("voice", settings.tts.voicestudio.voice))
     for label, voice in configured:
-        verdict = "found" if voice in known else "WARNING not in the server's voice list"
+        if voice in designs:
+            verdict = "voice design (config)"
+        elif voice in known:
+            verdict = "found"
+        else:
+            verdict = "WARNING not in the server's voice list"
         lines.append(f"    {label}={voice}: {verdict}")
     return lines
+
+
+def describe_design_attributes(server: dict[str, list[str]] | None) -> list[str]:
+    """``doctor`` lines comparing Voxello's voice-design vocabulary with the server's."""
+    from voxello.core.voice_design import VOICE_DESIGN_ATTRIBUTES
+
+    if server is None:
+        return []
+    lines: list[str] = []
+    for category in sorted(set(server) | set(VOICE_DESIGN_ATTRIBUTES)):
+        theirs = set(server.get(category, []))
+        ours = set(VOICE_DESIGN_ATTRIBUTES.get(category, frozenset()))
+        lines += [
+            f"    WARNING the server accepts {category} '{value}' that Voxello rejects"
+            for value in sorted(theirs - ours)
+        ]
+        lines += [
+            f"    WARNING the server no longer lists {category} '{value}'"
+            for value in sorted(ours - theirs)
+        ]
+    if not lines:
+        return ["  voice design: vocabulary matches the server"]
+    return ["  voice design: vocabulary differs from the server (update Voxello?)", *lines]
 
 
 async def _doctor_synth(provider: TTSProvider, settings: Settings, language: str) -> bool:
@@ -369,10 +470,10 @@ async def _doctor_synth(provider: TTSProvider, settings: Settings, language: str
     from voxello.storage.wav import wav_duration_ms
 
     text = SAMPLE_PHRASES.get(language, SAMPLE_PHRASES["en"])
-    voice = resolve_voice(settings, None, language)
+    choice = resolve_voice(settings, None, language)
     started = time.perf_counter()
     try:
-        result = await provider.synthesize(text, voice, language)
+        result = await provider.synthesize(text, choice.voice, language, choice.instructions)
     except VoxelloError as exc:
         print(f"  synthesis: ERROR - {exc.code}: {exc.message}")
         return False
@@ -394,6 +495,9 @@ def describe_speech(settings: Settings) -> list[str]:
         pairs = ", ".join(f"{k}={v}" for k, v in sorted(speech.voices_by_language.items()))
         line += f" voices_by_language: {pairs}"
     lines = [line]
+    if speech.voice_designs:
+        designs = ", ".join(f'{k}="{v}"' for k, v in sorted(speech.voice_designs.items()))
+        lines.append(f"  voice_designs: {designs}")
     if settings.tts.voicestudio.language is not None:
         lines.append(
             "  DEPRECATED: tts.voicestudio.language is set; move it to speech.default_language"
@@ -415,6 +519,7 @@ async def cmd_speak(settings: Settings, args: argparse.Namespace) -> int:
             interrupt=True,
             cache=args.cache,
             language=args.language,
+            instructions=args.instructions,
         )
         print(result.model_dump_json(indent=2))
         if service.playback is not None and not args.no_play:
@@ -436,6 +541,8 @@ async def _deliver_notification(
     priority: str,
     cache: bool | None,
     language: str | None,
+    voice: str | None = None,
+    instructions: str | None = None,
 ) -> int:
     """Shared body of ``notify`` and ``hook notification``: deliver, print, wait, exit code."""
     from voxello.core.service import VoxelloService
@@ -449,6 +556,8 @@ async def _deliver_notification(
             priority=priority,  # type: ignore[arg-type]
             cache=cache,
             language=language,
+            voice=voice,
+            instructions=instructions,
         )
         print(result.model_dump_json(indent=2))
         if service.playback is not None:
@@ -466,6 +575,8 @@ async def cmd_notify(settings: Settings, args: argparse.Namespace) -> int:
         priority=args.priority,
         cache=args.cache,
         language=args.language,
+        voice=args.voice,
+        instructions=args.instructions,
     )
 
 
@@ -524,10 +635,16 @@ def _human_size(size: int) -> str:
 def cmd_cache(settings: Settings, args: argparse.Namespace) -> int:
     from voxello.core.service import VoxelloService
 
-    cache = VoxelloService.cache_from_settings(settings)
-    if cache is None:
-        print("The audio cache is disabled (cache.enabled: false).", file=sys.stderr)
-        return 1
+    if not settings.cache.enabled:
+        if args.cache_command == "warm":
+            print("The audio cache is disabled (cache.enabled: false).", file=sys.stderr)
+            return 1
+        print(
+            "note: the audio cache is disabled (cache.enabled: false); "
+            "its files from when it was on are still on disk.",
+            file=sys.stderr,
+        )
+    cache = VoxelloService.cache_files(settings)
     if args.cache_command == "list":
         entries = cache.entries()
         for entry in entries:
@@ -599,6 +716,7 @@ async def cmd_cache_warm(settings: Settings, args: argparse.Namespace) -> int:
                     mode="notification",
                     cache=True,
                     language=language,
+                    instructions=args.instructions,
                 )
             except VoxelloError as exc:
                 failed += 1
@@ -613,6 +731,91 @@ async def cmd_cache_warm(settings: Settings, args: argparse.Namespace) -> int:
     plural = "" if synthesized == 1 else "s"
     print(f"Warmed {synthesized} phrase{plural} ({already} already cached, {failed} failed)")
     return 0 if failed == 0 else 1
+
+
+def _confirm(prompt: str, yes: bool) -> bool | None:
+    """``True``/``False`` from ``--yes`` or an interactive answer; ``None`` without a TTY."""
+    if yes:
+        return True
+    if not sys.stdin.isatty():
+        return None
+    return input(f"{prompt} [y/N] ").strip().lower() in ("y", "yes")
+
+
+async def cmd_voice(settings: Settings, args: argparse.Namespace) -> int:
+    """``voice list|clone|update|delete``: cloned voices live on the TTS server."""
+    from voxello.core.service import VoxelloService
+    from voxello.core.voices import VoiceLibrary, profile_id_from
+    from voxello.tts.voicestudio import VoiceStudioProvider
+
+    if args.voice_command == "list":
+        designs = settings.speech.voice_designs
+        print(f"Voice designs (speech.voice_designs): {len(designs) or 'none'}")
+        for name, instructions in sorted(designs.items()):
+            print(f"  {name}: {instructions}")
+    elif args.voice_command == "clone":
+        profile_id = profile_id_from(args.name)
+        consent = _confirm(
+            f"Clone a voice from {args.audio}? Confirm the speaker has given permission.",
+            args.yes,
+        )
+        if not consent:
+            hint = "Re-run with --yes to confirm" if consent is None else "Not cloned"
+            print(
+                f"{hint}: only voices whose owner has given permission should be cloned.",
+                file=sys.stderr,
+            )
+            return 1
+    elif args.voice_command == "delete":
+        profile_id = profile_id_from(args.name)
+        confirmed = _confirm(f"Delete the cloned voice '{profile_id}' from the server?", args.yes)
+        if not confirmed:
+            if confirmed is None:
+                print("Re-run with --yes to delete without a prompt.", file=sys.stderr)
+            return 1
+
+    store = VoiceStudioProvider(settings.tts.voicestudio)
+    # Invalidate even while the cache is disabled: its files survive and would replay
+    # the old (or deleted) voice once it is re-enabled.
+    library = VoiceLibrary(store, VoxelloService.cache_files(settings))
+    try:
+        if args.voice_command == "list":
+            profiles = await library.list()
+            if not profiles:
+                print(f"No cloned voices on {settings.tts.voicestudio.base_url}.")
+            else:
+                print(f"Cloned voices on {settings.tts.voicestudio.base_url}: {len(profiles)}")
+            for profile in profiles:
+                created = f"  created {profile.created_at}" if profile.created_at else ""
+                text = f'  ref_text: "{profile.ref_text}"' if profile.ref_text else ""
+                print(f"  clone:{profile.profile_id}{created}{text}")
+            return 0
+        if args.voice_command == "delete":
+            evicted = await library.delete(args.name)
+            print(f"Cloned voice '{profile_id_from(args.name)}' deleted{_evicted(evicted)}.")
+            return 0
+        if args.voice_command == "clone":
+            change = await library.clone(
+                args.name, args.audio, ref_text=args.ref_text, overwrite=args.overwrite
+            )
+            verb = "created"
+        else:
+            change = await library.update(args.name, audio_path=args.audio, ref_text=args.ref_text)
+            verb = "updated"
+        for warning in change.warnings:
+            print(f"warning: {warning}", file=sys.stderr)
+        voice_id = f"clone:{change.profile.profile_id}"
+        print(f"Cloned voice '{change.profile.profile_id}' {verb}{_evicted(change.evicted)}.")
+        print(f'Try it: voxello speak "Ciao, sono la tua nuova voce." --voice {voice_id}')
+        return 0
+    finally:
+        await store.aclose()
+
+
+def _evicted(count: int) -> str:
+    if not count:
+        return ""
+    return f" ({count} cached phrase{'s' if count != 1 else ''} dropped)"
 
 
 def describe_installation() -> list[str]:

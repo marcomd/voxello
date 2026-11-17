@@ -62,10 +62,31 @@ def test_key_ignores_whitespace_variants_and_nfc():
         {"num_step": 16},
         {"guidance_scale": 3.0},
         {"text": "Claude Code ha finito!"},
+        {"instructions": "female, young adult"},
     ],
 )
 def test_key_changes_with_every_parameter(change: dict):
     assert AudioCache.key(replace(PARTS, **change)) != AudioCache.key(PARTS)
+
+
+def test_key_without_instructions_is_unchanged_from_before_voice_design():
+    """Entries warmed before voice design existed (hook phrases) must stay reachable."""
+    assert PARTS.instructions is None
+    assert AudioCache.key(PARTS) == (
+        "dbb8d068baf6e5f798c3880b4c65194a006dc0db4c2da728a2313839bb643fe1"
+    )
+
+
+def test_evict_voice_removes_only_matching_entries(tmp_path: Path):
+    cache = AudioCache(tmp_path / "audio", max_entries=10, max_age_days=30)
+    keys = {}
+    for voice in ("clone:marco", "marco", "nova"):
+        keys[voice] = AudioCache.key(replace(PARTS, voice=voice))
+        cache.store(keys[voice], make_wav(100), voice=voice, provider="fake", text_chars=5)
+    assert cache.evict_voice({"marco", "clone:marco"}) == 2
+    assert [e.voice for e in cache.entries()] == ["nova"]
+    assert cache.evict_voice({"ghost"}) == 0
+    assert AudioCache(tmp_path / "missing", max_entries=1, max_age_days=1).evict_voice({"x"}) == 0
 
 
 # -- storage ----------------------------------------------------------------------------

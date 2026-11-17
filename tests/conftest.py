@@ -15,7 +15,7 @@ from voxello.core.service import VoxelloService
 from voxello.errors import TTS_PROVIDER_UNAVAILABLE, VoxelloError
 from voxello.storage.cache import AudioCache
 from voxello.storage.files import OutputStore, TempStore
-from voxello.tts.base import ProviderHealth, SynthesisResult, VoiceInfo
+from voxello.tts.base import ProviderHealth, SynthesisResult, VoiceInfo, VoiceProfile
 
 
 @pytest.fixture(autouse=True)
@@ -47,28 +47,37 @@ class FakeProvider:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str | None, str | None]] = []
+        self.instructions: list[str | None] = []  # kept apart so `calls` stays a 3-tuple
         self.fail_with: VoxelloError | None = None
         self.duration_ms = 500
         self.delay = 0.0
         self.voices: list[VoiceInfo] = [VoiceInfo("default", "Default")]
+        self.attributes: dict[str, list[str]] | None = None  # server `design_attributes`
 
     async def synthesize(
-        self, text: str, voice: str | None = None, language: str | None = None
+        self,
+        text: str,
+        voice: str | None = None,
+        language: str | None = None,
+        instructions: str | None = None,
     ) -> SynthesisResult:
         self.calls.append((text, voice, language))
+        self.instructions.append(instructions)
         if self.delay:
             await asyncio.sleep(self.delay)
         if self.fail_with is not None:
             raise self.fail_with
-        return SynthesisResult(
-            make_wav(self.duration_ms), "audio/wav", self.name, voice or "default"
-        )
+        label = voice or (f"design:{instructions}" if instructions else "default")
+        return SynthesisResult(make_wav(self.duration_ms), "audio/wav", self.name, label)
 
     async def list_voices(self) -> list[VoiceInfo]:
         return list(self.voices)
 
     async def list_engines(self) -> list[str]:
         return ["omnivoice"]
+
+    async def design_attributes(self) -> dict[str, list[str]] | None:
+        return self.attributes
 
     async def health(self) -> ProviderHealth:
         if self.fail_with is not None and self.fail_with.code == TTS_PROVIDER_UNAVAILABLE:
@@ -77,6 +86,67 @@ class FakeProvider:
 
     async def aclose(self) -> None:
         return None
+
+
+class FakeVoiceProfileStore:
+    """In-memory stand-in for omnivoice-server's `/v1/voices/profiles`."""
+
+    def __init__(self) -> None:
+        self.profiles: dict[str, tuple[bytes, str, str | None]] = {}
+        self.fail_with: VoxelloError | None = None
+
+    def _check(self) -> None:
+        if self.fail_with is not None:
+            raise self.fail_with
+
+    async def create_voice_profile(
+        self,
+        profile_id: str,
+        audio: bytes,
+        filename: str,
+        *,
+        ref_text: str | None = None,
+        overwrite: bool = False,
+    ) -> VoiceProfile:
+        self._check()
+        if profile_id in self.profiles and not overwrite:
+            raise VoxelloError("voice_exists", f"'{profile_id}' exists; use overwrite")
+        self.profiles[profile_id] = (audio, filename, ref_text)
+        return VoiceProfile(profile_id, ref_text, "2026-11-17T10:00:00Z")
+
+    async def update_voice_profile(
+        self,
+        profile_id: str,
+        *,
+        audio: bytes | None = None,
+        filename: str | None = None,
+        ref_text: str | None = None,
+    ) -> VoiceProfile:
+        self._check()
+        if profile_id not in self.profiles:
+            raise VoxelloError("voice_not_found", f"no '{profile_id}'")
+        old_audio, old_name, old_text = self.profiles[profile_id]
+        self.profiles[profile_id] = (
+            audio if audio is not None else old_audio,
+            filename or old_name,
+            ref_text if ref_text is not None else old_text,
+        )
+        return VoiceProfile(profile_id, self.profiles[profile_id][2], "2026-11-17T10:00:00Z")
+
+    async def delete_voice_profile(self, profile_id: str) -> None:
+        self._check()
+        if self.profiles.pop(profile_id, None) is None:
+            raise VoxelloError("voice_not_found", f"no '{profile_id}'")
+
+    async def list_voice_profiles(self) -> list[VoiceProfile]:
+        self._check()
+        return [
+            VoiceProfile(pid, text, "2026-11-17T10:00:00Z")
+            for pid, (_, _, text) in sorted(self.profiles.items())
+        ]
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 class FakeHandle:

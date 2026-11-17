@@ -40,6 +40,18 @@ def test_speech_settings_validation(tmp_path: Path):
         Settings(speech={"voices_by_language": {"it": " "}})
 
 
+def test_voice_designs_are_validated_and_stored_canonical():
+    settings = Settings(
+        speech={"voice_designs": {"narratrice": " Female,Young Adult , HIGH pitch"}}
+    )
+    assert settings.speech.voice_designs == {"narratrice": "female, young adult, high pitch"}
+    assert Settings().speech.voice_designs == {}
+    with pytest.raises(ValidationError, match="Unknown voice-design attribute"):
+        Settings(speech={"voice_designs": {"x": "female, italian accent"}})
+    with pytest.raises(ValidationError, match="voice_designs name"):
+        Settings(speech={"voice_designs": {"clone:bad": "female"}})
+
+
 def test_deprecated_language_key_migrates_with_a_warning(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ):

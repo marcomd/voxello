@@ -7,10 +7,26 @@ change the MCP tool signatures or the configuration layout.
 
 ## [Unreleased]
 
-Per-request language selection (roadmap milestone 3) and quality and robustness work (roadmap
-milestone 4).
+Per-request language selection (roadmap milestone 3), quality and robustness work (roadmap
+milestone 4), and cloned and designed voices (roadmap milestone 6).
 
 ### Added
+
+- Voice design: `instructions` on the `speak` and `notify` tools, `--instructions/-i` on
+  `speak`, `notify` and `cache warm`. Attributes (`female, young adult, high pitch`) are checked
+  against the OmniVoice vocabulary, normalized, sent to omnivoice-server and reported back in
+  `SpeechResult.instructions`. Unknown or conflicting attributes fail with `invalid_instructions`.
+- `speech.voice_designs`: named designs usable wherever a voice is accepted, including
+  `voices_by_language` and `tts.voicestudio.voice`.
+- Cloned voices: `voxello voice clone NAME FILE [--ref-text] [--overwrite] [--yes]`,
+  `voice update`, `voice delete` and `voice list` manage omnivoice-server profiles, used
+  afterwards as `--voice clone:NAME`. `clone` asks to confirm the speaker's permission. New error
+  codes `voice_exists`, `voice_cloning_unsupported` and `invalid_reference_audio`. Cached phrases
+  recorded with a voice are dropped when Voxello changes or deletes it, also while
+  `cache.enabled` is false, so re-enabling the cache never replays the old voice.
+- The `notify` tool and `voxello notify` accept `voice`.
+- `voxello doctor` lists voice designs and cloned voices and warns when the server's voice-design
+  vocabulary differs from Voxello's.
 
 - `tts.voicestudio.connect_timeout_seconds` (5), `retries` (1) and `retry_backoff_seconds` (0.5):
   a synthesis request that fails to connect or gets HTTP 502/503/504 is retried with exponential
@@ -58,6 +74,8 @@ milestone 4).
 
 ### Fixed
 
+- An unknown `clone:<name>` voice (HTTP 404 from omnivoice-server) is reported as `voice_not_found`
+  instead of a missing-endpoint `tts_provider_error`.
 - Desktop notification subprocesses are killed and reaped when delivery times out or is cancelled.
 
 ### Changed
@@ -67,6 +85,8 @@ milestone 4).
   `voxello hook notification --language "$VOXELLO_HOOK_LANG" --channels "$VOXELLO_HOOK_CHANNELS"`.
   Adding a hook language means adding a message file. `voxello install claude --lang` accepts
   every language that has one. Re-run `voxello install claude` to update the installed copy.
+- `voxello cache list` and `cache clear` work while `cache.enabled` is false, on the files kept
+  from when it was on (with a note on stderr). `cache warm` still refuses.
 - `voxello cache warm --language` now also sets the TTS language of the warmed phrases, so the
   English hook sentences are cached under the key the hook will look up.
 - The `voice-notify` skill passes `language` consistent with the message text.

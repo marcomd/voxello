@@ -23,6 +23,19 @@ from voxello.errors import VoxelloError
 
 log = logging.getLogger(__name__)
 
+VOICE_DESCRIPTION = (
+    "Voice to use: a server voice id, 'clone:<name>' for a cloned voice the user created, or "
+    "a voice-design name from the user's config. Omit for the configured default."
+)
+INSTRUCTIONS_DESCRIPTION = (
+    "Design a voice instead of picking one: comma-separated OmniVoice attributes, at most one "
+    "per category. gender: male, female; age: child, teenager, young adult, middle-aged, "
+    "elderly; pitch: very low pitch, low pitch, moderate pitch, high pitch, very high pitch; "
+    "style: whisper; English text only: american, british, australian, canadian, indian, "
+    "chinese, korean, japanese, portuguese or russian accent. Example: 'female, young adult, "
+    "high pitch'. Do not combine with `voice`. Omit unless the user asked for a kind of voice."
+)
+
 
 class ServiceHolder:
     """Late-bound reference to the running service, filled in by the lifespan."""
@@ -58,9 +71,7 @@ def register_tools(mcp: MCPServer, holder: ServiceHolder) -> None:
     )
     async def speak(
         text: Annotated[str, Field(description="Text to speak, verbatim.", min_length=1)],
-        voice: Annotated[
-            str | None, Field(description="Voice profile id; omit for the configured default.")
-        ] = None,
+        voice: Annotated[str | None, Field(description=VOICE_DESCRIPTION)] = None,
         interrupt: Annotated[
             bool | None,
             Field(description="Stop current playback first (default from config, usually true)."),
@@ -94,6 +105,7 @@ def register_tools(mcp: MCPServer, holder: ServiceHolder) -> None:
                 )
             ),
         ] = None,
+        instructions: Annotated[str | None, Field(description=INSTRUCTIONS_DESCRIPTION)] = None,
     ) -> SpeechResult:
         service = holder.get()
         try:
@@ -107,6 +119,7 @@ def register_tools(mcp: MCPServer, holder: ServiceHolder) -> None:
                 client_id=client_id,
                 cache=cache,
                 language=language,
+                instructions=instructions,
             )
         except VoxelloError as exc:
             raise ToolError(str(exc)) from exc
@@ -201,6 +214,8 @@ def register_tools(mcp: MCPServer, holder: ServiceHolder) -> None:
                 )
             ),
         ] = None,
+        voice: Annotated[str | None, Field(description=VOICE_DESCRIPTION)] = None,
+        instructions: Annotated[str | None, Field(description=INSTRUCTIONS_DESCRIPTION)] = None,
     ) -> NotifyResult:
         service = holder.get()
         try:
@@ -212,6 +227,8 @@ def register_tools(mcp: MCPServer, holder: ServiceHolder) -> None:
                 client_id=client_id,
                 cache=cache,
                 language=language,
+                voice=voice,
+                instructions=instructions,
             )
         except VoxelloError as exc:
             raise ToolError(str(exc)) from exc

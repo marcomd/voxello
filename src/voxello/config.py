@@ -22,6 +22,9 @@ from platformdirs import user_cache_dir, user_config_dir
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
+from voxello.core.voice_design import normalize_instructions
+from voxello.errors import VoxelloError
+
 log = logging.getLogger(__name__)
 
 APP_NAME = "voxello"
@@ -30,6 +33,9 @@ CONFIG_ENV_VAR = "VOXELLO_CONFIG"
 # ISO 639-1: two lowercase letters (roadmap 3.1). Shared with the service's validation.
 LANGUAGE_PATTERN = r"^[a-z]{2}$"
 LANGUAGE_RE = re.compile(LANGUAGE_PATTERN)
+
+# Names of reusable voice designs: the same alphabet omnivoice-server allows for profile ids.
+VOICE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 # Flat env aliases from the spec -> dotted path in the settings tree.
 FLAT_ENV_ALIASES: dict[str, tuple[str, ...]] = {
@@ -109,7 +115,12 @@ class SpeechSettings(BaseModel):
         default_factory=dict,
         description="Voice id per language, used when a request passes no explicit voice. "
         "Precedence: request voice > voices_by_language[language] > tts.voicestudio.voice "
-        "> server default.",
+        "> server default. A value may name an entry of voice_designs.",
+    )
+    voice_designs: dict[str, str] = Field(
+        default_factory=dict,
+        description="Reusable OmniVoice voice designs: name -> comma-separated attributes such "
+        "as 'female, young adult, high pitch'. Use the name wherever a voice is accepted.",
     )
 
     @field_validator("voices_by_language")
@@ -124,6 +135,21 @@ class SpeechSettings(BaseModel):
             if not voice or not voice.strip():
                 raise ValueError(f"speech.voices_by_language['{language}'] must name a voice")
         return value
+
+    @field_validator("voice_designs")
+    @classmethod
+    def _check_designs(cls, value: dict[str, str]) -> dict[str, str]:
+        designs: dict[str, str] = {}
+        for name, instructions in value.items():
+            if not VOICE_NAME_RE.fullmatch(name):
+                raise ValueError(
+                    f"speech.voice_designs name '{name}' must be 1-64 letters, digits, '-' or '_'"
+                )
+            try:
+                designs[name] = normalize_instructions(instructions)
+            except VoxelloError as exc:
+                raise ValueError(f"speech.voice_designs['{name}']: {exc.message}") from exc
+        return designs
 
 
 class PlaybackSettings(BaseModel):
@@ -342,8 +368,11 @@ tts:
 speech:
   default_language: it                  # ISO 639-1; agents pass `language` per request
   # voices_by_language:                 # voice used when a request passes no voice
-  #   it: italian_voice
-  #   en: english_voice
+  #   it: clone:marco                   # a cloned voice (`voxello voice clone marco FILE`)
+  #   en: narrator                      # a name from voice_designs below
+  # voice_designs:                      # reusable OmniVoice voice designs, used by name
+  #   narrator: "female, young adult, high pitch"
+  #   whisperer: "male, elderly, whisper"
 
 playback:
   enabled: true

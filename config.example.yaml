@@ -17,8 +17,11 @@ tts:
 speech:
   default_language: it                  # ISO 639-1; agents pass `language` per request
   # voices_by_language:                 # voice used when a request passes no voice
-  #   it: italian_voice
-  #   en: english_voice
+  #   it: clone:marco                   # a cloned voice (`voxello voice clone marco FILE`)
+  #   en: narrator                      # a name from voice_designs below
+  # voice_designs:                      # reusable OmniVoice voice designs, used by name
+  #   narrator: "female, young adult, high pitch"
+  #   whisperer: "male, elderly, whisper"
 
 playback:
   enabled: true

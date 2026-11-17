@@ -19,6 +19,16 @@ class VoiceInfo:
     id: str
     name: str | None = None
     language: str | None = None
+    kind: str | None = None  # omnivoice-server `type`: auto, design, preset, file, clone
+
+
+@dataclass(frozen=True)
+class VoiceProfile:
+    """A cloned voice stored on the TTS server (omnivoice-server `/v1/voices/profiles`)."""
+
+    profile_id: str
+    ref_text: str | None = None
+    created_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -33,9 +43,18 @@ class TTSProvider(Protocol):
     name: str
 
     async def synthesize(
-        self, text: str, voice: str | None = None, language: str | None = None
+        self,
+        text: str,
+        voice: str | None = None,
+        language: str | None = None,
+        instructions: str | None = None,
     ) -> SynthesisResult:
-        """Synthesize ``text``; ``language`` is the ISO 639-1 code of the text (roadmap 3.1)."""
+        """Synthesize ``text``.
+
+        ``language`` is the ISO 639-1 code of the text (roadmap 3.1); ``instructions`` are
+        canonical voice-design attributes, sent instead of a voice (the service never passes
+        both).
+        """
         ...
 
     async def list_voices(self) -> list[VoiceInfo]: ...
@@ -45,3 +64,30 @@ class TTSProvider(Protocol):
     async def health(self) -> ProviderHealth: ...
 
     async def aclose(self) -> None: ...
+
+
+class VoiceProfileStore(Protocol):
+    """Server-side storage of cloned voices, referenced afterwards as ``clone:<profile_id>``."""
+
+    async def create_voice_profile(
+        self,
+        profile_id: str,
+        audio: bytes,
+        filename: str,
+        *,
+        ref_text: str | None = None,
+        overwrite: bool = False,
+    ) -> VoiceProfile: ...
+
+    async def update_voice_profile(
+        self,
+        profile_id: str,
+        *,
+        audio: bytes | None = None,
+        filename: str | None = None,
+        ref_text: str | None = None,
+    ) -> VoiceProfile: ...
+
+    async def delete_voice_profile(self, profile_id: str) -> None: ...
+
+    async def list_voice_profiles(self) -> list[VoiceProfile]: ...

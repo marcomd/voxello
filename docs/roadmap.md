@@ -230,6 +230,23 @@ In estimated order of usefulness, all at the same low priority until milestones 
 - **Audio ducking / presence** (spec 34): out of scope until there is demand.
 - **STT, hotkeys, remote output**: spec phase 5, not planned.
 
+## Milestone 6 — Cloned and designed voices (done 2026-11-17)
+
+Goal: create a voice once and reuse it everywhere, and describe a voice in words.
+
+Delivered: `core/voice_design.py` (OmniVoice vocabulary, canonical form, `invalid_instructions`);
+`instructions` on `TTSProvider.synthesize`, the service, the MCP `speak`/`notify` tools and the
+CLI; `speech.voice_designs` resolved by `resolve_voice` into a `VoiceChoice` (voice or
+instructions, never both); `instructions` in `CacheKeyParts`, left out of the hash when unset so
+older keys survive; the provider's `/v1/voices/profiles` operations and `core/voices.py`
+(`VoiceLibrary`: names, reference audio, 3-10 s warning, cache eviction per voice);
+`voxello voice list|clone|update|delete` with a consent prompt; `doctor` lines for designs,
+clones and vocabulary drift; an opt-in integration test that clones a server-synthesized
+recording. Decisions in `docs/decisions/0001-voice-profiles-on-server.md`: profiles stay on the
+server and cloning is CLI-only. Deviations: the cache sidecar needed no `instructions` field
+because the voice label already records `design:<attributes>`; VoiceStudio (`instruct`, no
+profile API) is not supported.
+
 ## Recommended order
 
 | Step | Item | Reason |
@@ -240,7 +257,8 @@ In estimated order of usefulness, all at the same low priority until milestones 
 | 4 | 1.1 + 1.2 | Done: global tool installation, hook independent of the checkout |
 | 5 | 3.2, 1.3 | Done: `voices_by_language`, `warm`, 1.3 |
 | 6 | Milestone 4 | Done: retry, `doctor --synth`, Windows CI leg and checklist, gated release |
-| 7 | Milestone 5 | On demand |
+| 7 | Milestone 6 | Done: cloned voices on the server, voice design by attributes or by name |
+| 8 | Milestone 5 | On demand |
 
 Items 3.1 and 2.x were done before the first PyPI release (1.1) because they change the MCP
 tool signatures and the configuration layout: better to do that before external installations

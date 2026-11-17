@@ -36,6 +36,15 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+@dataclass(frozen=True)
+class VoiceChoice:
+    """Effective voice of one request: a voice id, voice-design instructions, or neither
+    (server default). Never both: the server would silently drop one of them."""
+
+    voice: str | None = None
+    instructions: str | None = None
+
+
 @dataclass
 class SpeechRequest:
     id: str
@@ -67,6 +76,7 @@ class RequestRecord:
     error: str | None = None
     cached: bool = False
     language: str | None = None  # effective ISO 639-1 code once validated (roadmap 3.1)
+    instructions: str | None = None  # effective voice-design attributes, canonical form
 
     def set_state(self, state: RequestState) -> None:
         self.state = state
@@ -87,6 +97,11 @@ class SpeechResult(BaseModel):
     )
     cached: bool = Field(
         default=False, description="True when the audio came from the on-disk cache."
+    )
+    instructions: str | None = Field(
+        default=None,
+        description="Effective voice-design attributes, when the voice was designed rather "
+        "than picked (explicit `instructions` or a named design from the config).",
     )
 
 

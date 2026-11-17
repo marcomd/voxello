@@ -3,8 +3,10 @@
 Fixed sentences such as the Claude Code hook alerts are synthesized once and replayed from
 here afterwards, which removes the TTS round trip and keeps alerts working while the
 server is down. Entries are keyed by a SHA-256 of every parameter that shapes the audio
-(normalized text, voice, engine, language, speed, num_step, guidance_scale, server URL), so
-changing the voice or the server simply produces new keys.
+(normalized text, voice, voice-design instructions, engine, language, speed, num_step,
+guidance_scale, server URL), so changing the voice or the server simply produces new keys.
+A cloned voice keeps its ``clone:<id>`` name when its reference audio is replaced, so
+``evict_voice`` drops the entries recorded under that name.
 
 Privacy (spec sections 18 and 27): the directory is 0700 and files 0600 like the temporary
 store; file names are the hash, never the text; the JSON sidecar next to each WAV stores the
@@ -59,6 +61,8 @@ class CacheKeyParts:
     num_step: int | None
     guidance_scale: float | None
     base_url: str
+    # Added with voice design; left out of the hash when None so older keys stay valid.
+    instructions: str | None = None
 
 
 @dataclass(frozen=True)
@@ -94,6 +98,8 @@ class AudioCache:
     def key(parts: CacheKeyParts) -> str:
         data: dict[str, Any] = asdict(parts)
         data["text"] = normalize_text(parts.text)
+        if data["instructions"] is None:
+            del data["instructions"]
         data["v"] = KEY_VERSION
         payload = json.dumps(data, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -208,6 +214,19 @@ class AudioCache:
             removed += 1
         if removed:
             log.info("audio cache evicted %d entr%s", removed, "y" if removed == 1 else "ies")
+        return removed
+
+    def evict_voice(self, voices: set[str]) -> int:
+        """Delete the entries synthesized with one of ``voices`` (sidecar voice label).
+
+        Used when a cloned voice's reference audio changes under the same name. Returns the
+        number of entries removed.
+        """
+        removed = 0
+        for entry in self.entries():
+            if entry.voice in voices:
+                self._remove(entry.key)
+                removed += 1
         return removed
 
     def clear(self) -> int:

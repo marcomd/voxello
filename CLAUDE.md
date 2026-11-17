@@ -11,6 +11,8 @@ Voxello is an MCP server (stdio) that gives AI agents a voice on the user's mach
 `stop_speaking`, `get_status`. It sends text to an OpenAI-compatible TTS endpoint (VoiceStudio on port
 3900 or headless `omnivoice-server` on port 8880, both running OmniVoice), plays the WAV with a local
 player subprocess (`afplay`/`mpv`/`paplay`/`aplay`/`ffplay`/PowerShell), and shows desktop notifications.
+With omnivoice-server it also clones voices (server-side profiles, managed from the CLI only) and
+designs them from attributes (`instructions`).
 The full design lives in `docs/voxello-specification.md`; code comments cite its section numbers
 (for example "spec section 15" for queue semantics, "section 23" for error codes).
 
@@ -31,6 +33,8 @@ uv run voxello notify "text" --channels voice,desktop [--no-cache] [-l en]
 echo '{"notification_type":"idle_prompt"}' | uv run voxello hook notification -l it   # what the Claude Code hook runs
 uv run voxello cache list|clear                   # audio cache: hash, size, chars, voice, last use
 uv run voxello cache warm --hook-phrases --language it|en   # or: cache warm FILE, cache warm -
+uv run voxello speak "text" -l en -i "female, young adult, high pitch"   # voice design
+uv run voxello voice list|clone NAME FILE [--ref-text T] [--yes]|update NAME|delete NAME
 uv run voxello serve                              # MCP server over stdio (what agents run)
 uv run voxello config init|path|show
 uv run voxello install claude [--yes] [--claude-dir DIR]   # copy skill + hook into ~/.claude, offer settings.json entry
@@ -65,8 +69,19 @@ Layers, top to bottom, each depending only on the ones below:
   effective voice once (request `voice` > `speech.voices_by_language[language]` >
   `tts.voicestudio.voice` > `None` for the server default) so the provider call and the cache
   key see the same voice and language. `SpeechResult.language` reports the effective code.
+  `resolve_voice` returns a `VoiceChoice(voice, instructions)` (`core/models.py`): explicit
+  `instructions` (validated by `core/voice_design.normalize_instructions`) bypass configured
+  voices and are an `invalid_parameter` error together with `voice`; a resolved name found in
+  `speech.voice_designs` becomes those instructions. Never send both to the server: a profile
+  wins over instructions there.
+- `core/voices.py` (`VoiceLibrary`) is the policy behind `voxello voice`: profile-id and
+  reference-audio checks, the 3-10 s warning, and `AudioCache.evict_voice({id, "clone:id"})`
+  after every change. It talks to a `VoiceProfileStore` (`tts/base.py`), implemented by the
+  VoiceStudio provider over omnivoice-server's `/v1/voices/profiles`. Cloning is deliberately
+  not an MCP tool (consent, spec section 26; `docs/decisions/0001-voice-profiles-on-server.md`).
 - `storage/cache.py` (`AudioCache`) keys entries by SHA-256 of `CacheKeyParts` (normalized text,
-  effective voice, engine, language, speed, num_step, guidance_scale, base_url); files are
+  effective voice, instructions (hashed only when set, so older keys stay valid), engine,
+  language, speed, num_step, guidance_scale, base_url); files are
   `<hash>.wav` plus a `<hash>.json` sidecar (voice label, provider, text length, never the text).
   LRU uses the WAV mtime, touched on hit; `evict()` runs after every store. It lives in
   `user_cache_dir/audio`, a sibling of `TempStore`'s `tmp/`, and `Settings` rejects the two
@@ -80,6 +95,10 @@ Layers, top to bottom, each depending only on the ones below:
 - `tts/voicestudio.py` is the only provider. It speaks `POST /v1/audio/speech` and probes
   alternative paths for voices/engines because VoiceStudio and omnivoice-server differ
   (`VOICES_PATHS`, `ENGINES_PATHS`). HTTP failures are translated into stable error codes.
+  `instructions` is sent only when set, and the configured voice is not added then. An unknown
+  `clone:<id>` voice is a 404 mapped to `voice_not_found`; rejected attributes are
+  `invalid_instructions`. Profile requests (`create/update/delete/list_voice_profiles`) are
+  never retried; a bare FastAPI 404/405 means `voice_cloning_unsupported` (e.g. VoiceStudio).
   `_post_speech` retries `tts.voicestudio.retries` times (default 1) with exponential backoff
   from `retry_backoff_seconds` on connection-phase failures (`RETRIABLE_EXCEPTIONS`) and HTTP
   502/503/504 (`RETRIABLE_STATUSES`); 4xx and read timeouts are never retried because a slow
@@ -120,7 +139,11 @@ or a real TTS server belongs under `tests/integration/` with the `integration` m
   (`default` vs `auto`) and each rejects the other's.
 - Cache files are never deleted by playback, the temp sweeper or shutdown: every discard goes
   through `TempStore.discard`, which ignores paths outside the temp dir. Only `AudioCache.evict`
-  and `clear` remove them. Anything that shapes the audio must be part of `CacheKeyParts`.
+  and `clear` remove them (plus `evict_voice` when a cloned voice changes). Anything that
+  shapes the audio must be part of `CacheKeyParts`; new fields must keep old keys stable, as
+  `instructions` does by staying out of the hash when unset.
+- A request carries either a voice or voice-design instructions, never both. Clone voices only
+  from the CLI, after the speaker's consent prompt.
 
 ## Claude Code integration shipped in the package
 
