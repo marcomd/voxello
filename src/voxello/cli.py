@@ -735,15 +735,19 @@ def _speak_phrase_detached(key: str, config: Path | None, cwd: str | None = None
     the event's ``cwd`` travels along so the child reads the same project file. The agent is
     not held for the length of the audio.
     """
-    argv = [sys.executable, "-m", "voxello"]
+    # The hook runs in the project directory, which may be an untrusted checkout: -P keeps it
+    # off sys.path (a `voxello/` folder there must not shadow the package) and the child runs
+    # from the home directory. The event's cwd travels in the JSON instead.
+    argv = [sys.executable, "-P", "-m", "voxello"]
     if config is not None:
-        argv += ["--config", str(config)]
+        argv += ["--config", str(config.expanduser().absolute())]
     argv += ["hook", "notification", "--priority", "normal"]
     child = subprocess.Popen(  # fixed argument list, never a shell
         argv,
         stdin=subprocess.PIPE,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        cwd=str(Path.home()),
         start_new_session=True,
     )
     stdin = cast("IO[bytes]", child.stdin)  # never None with stdin=PIPE

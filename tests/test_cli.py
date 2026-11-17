@@ -846,8 +846,10 @@ def test_hook_stop_codex_speaks_the_phrase_in_a_detached_child(
     assert main(["--config", str(isolated_env / "c.yaml"), "hook", "stop", "--agent", "codex"]) == 0
     assert capsys.readouterr().out.strip() == "{}"
     (child,) = popen
-    assert child.argv[1:3] == ["-m", "voxello"]
-    assert child.argv[3:] == [
+    # -P: the hook runs in the project, whose directory must not shadow the voxello package.
+    assert child.argv[1:4] == ["-P", "-m", "voxello"]
+    assert child.kwargs["cwd"] == str(Path.home())
+    assert child.argv[4:] == [
         "--config",
         str(isolated_env / "c.yaml"),
         "hook",
@@ -888,6 +890,17 @@ async def test_doctor_shows_what_the_agent_integrations_say_and_with_which_voice
     assert "    integrations.phrases.voice=nope: WARNING not in the server's voice list" in lines
 
 
+def test_detached_child_gets_an_absolute_config_path(
+    isolated_env: Path, hook_stdin, monkeypatch: pytest.MonkeyPatch, popen
+):
+    monkeypatch.chdir(isolated_env)
+    hook_stdin(stop_payload(None))
+    assert main(["--config", "c.yaml", "hook", "stop", "--agent", "codex"]) == 0
+    assert popen[0].argv[4] == "--config"
+    config = Path(popen[0].argv[5])
+    assert config.is_absolute() and config.resolve() == (isolated_env / "c.yaml").resolve()
+
+
 def test_hook_channels_default_and_detached_child_without_config(
     isolated_env: Path, hook_stdin, monkeypatch: pytest.MonkeyPatch, popen
 ):
@@ -897,7 +910,7 @@ def test_hook_channels_default_and_detached_child_without_config(
     assert hook_channels(Settings(), None) == ["voice", "desktop"]
     hook_stdin(stop_payload(None))
     assert main(["hook", "stop", "--agent", "codex"]) == 0
-    assert popen[0].argv[3:] == ["hook", "notification", "--priority", "normal"]
+    assert popen[0].argv[4:] == ["hook", "notification", "--priority", "normal"]
 
 
 def test_hooks_use_the_project_file_of_the_event_cwd(
