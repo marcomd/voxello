@@ -587,3 +587,19 @@ async def test_doctor_reports_designs_clones_and_vocabulary_drift(
     out = capsys.readouterr().out
     assert "WARNING the server accepts style 'shout'" in out
     assert "WARNING the server no longer lists gender 'male'" in out
+
+
+async def test_doctor_survives_an_unreadable_design_vocabulary(
+    doctor_settings: Settings,
+    doctor_provider: FakeProvider,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    async def broken() -> None:
+        raise VoxelloError(TTS_PROVIDER_ERROR, "boom")
+
+    monkeypatch.setattr(doctor_provider, "design_attributes", broken)
+    assert await cmd_doctor(doctor_settings, None, provider=doctor_provider) == 0
+    assert "  voice design: could not read the vocabulary (tts_provider_error)" in (
+        capsys.readouterr().out
+    )

@@ -310,3 +310,11 @@ async def test_profile_success_without_json_body_is_a_provider_error():
         await provider.create_voice_profile("marco", make_wav(100), "a.wav")
     assert exc.value.code == TTS_PROVIDER_ERROR
     await provider.aclose()
+
+
+async def test_plain_text_404_means_no_profile_api():
+    provider, _ = make_provider(lambda _r: httpx2.Response(404, text="nothing here"))
+    with pytest.raises(VoxelloError) as exc:
+        await provider.update_voice_profile("marco", ref_text="x")
+    assert exc.value.code == VOICE_CLONING_UNSUPPORTED
+    await provider.aclose()

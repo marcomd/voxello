@@ -21,9 +21,12 @@ answer aloud when the user asks for it, and `notify` when a long task finishes o
 attention. Keep spoken text under about 20 seconds (one to three sentences); the textual \
 reply remains the place for details. Pass `language` (ISO 639-1, e.g. `it` or `en`) matching \
 the language the text is written in, so pronunciation is right; omit it for the configured \
-default. Use `stop_speaking` to interrupt playback and `get_status` to check what is playing \
-and whether the TTS provider is reachable. Voxello speaks exactly the text you pass; it never \
-summarizes or rewrites it."""
+default. Leave `voice` and `instructions` unset unless the user asks for a particular voice: \
+`voice` takes a server voice, `clone:<name>` for a voice the user cloned, or a voice-design \
+name from their config; `instructions` designs one from attributes such as `female, young \
+adult, high pitch` (never both). Use `stop_speaking` to interrupt playback and `get_status` \
+to check what is playing and whether the TTS provider is reachable. Voxello speaks exactly \
+the text you pass; it never summarizes or rewrites it."""
 
 
 def create_server(settings: Settings, service: VoxelloService | None = None) -> MCPServer:

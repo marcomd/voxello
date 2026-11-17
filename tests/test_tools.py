@@ -76,6 +76,31 @@ async def test_tools_are_listed_with_annotations(settings, stack):
         assert "language" in tools["speak"].output_schema["properties"]
         assert "cache_hits" in tools["get_status"].output_schema["properties"]
         assert "saved_path" in tools["notify"].output_schema["properties"]
+        assert "instructions" in tools["speak"].input_schema["properties"]
+        assert {"voice", "instructions"} <= set(tools["notify"].input_schema["properties"])
+        assert "instructions" in tools["speak"].output_schema["properties"]
+        names = set().union(*(t.input_schema["properties"] for t in tools.values()))
+        assert not {"ref_audio", "profile_id"} & names, "cloning stays a CLI-only action"
+
+
+async def test_speak_and_notify_pass_voice_design(settings, stack):
+    provider, player, _, service = stack
+    async with connected(settings, service) as session:
+        result = await session.call_tool(
+            "speak", {"text": "Hi", "instructions": "Female, Whisper", "language": "en"}
+        )
+        assert not result.is_error
+        assert result.structured_content["instructions"] == "female, whisper"
+        assert provider.instructions[-1] == "female, whisper"
+        await player.wait_started()
+        notified = await session.call_tool(
+            "notify", {"message": "Done", "channels": ["voice"], "voice": "clone:marco"}
+        )
+        assert notified.structured_content["status"] == "delivered"
+        assert provider.calls[-1] == ("Done", "clone:marco", "it")
+        bad = await session.call_tool("speak", {"text": "Hi", "instructions": "robot"})
+        assert bad.is_error
+        assert "invalid_instructions" in bad.content[0].text
 
 
 async def test_speak_status_stop_round_trip(settings, stack):
