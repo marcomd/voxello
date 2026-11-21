@@ -1,6 +1,6 @@
 # Voxello roadmap
 
-Status as of 2026-09-17. The MVP described in the specification (phases 1-3, section 38) is
+Status as of 2026-11-21 (version 0.3.0). The MVP described in the specification (phases 1-3, section 38) is
 implemented: `speak`, `stop_speaking`, `get_status`, `notify`, queue with interrupt, VoiceStudio /
 omnivoice-server provider, desktop notifications, CLI, Claude Code skill and hook. This roadmap
 lists what is missing to make Voxello an everyday tool, in priority order.

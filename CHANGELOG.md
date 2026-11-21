@@ -7,6 +7,8 @@ change the MCP tool signatures or the configuration layout.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-21
+
 Per-request language selection (roadmap milestone 3), quality and robustness work (roadmap
 milestone 4), cloned and designed voices (roadmap milestone 6), and configurable agent
 notifications for Claude Code and Codex (roadmap milestone 7).
@@ -197,6 +199,7 @@ First working version: the MVP of the specification (phases 1-3) plus roadmap mi
 - Installable as a uv tool from any project; dynamic version from `voxello.__version__`;
   GitHub Actions CI and a tag-driven release workflow publishing to PyPI.
 
-[Unreleased]: https://github.com/marcomd/voxello/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/marcomd/voxello/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/marcomd/voxello/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/marcomd/voxello/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/marcomd/voxello/releases/tag/v0.1.0
