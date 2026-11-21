@@ -89,9 +89,8 @@ def register_tools(mcp: MCPServer, holder: ServiceHolder) -> None:
             bool | None,
             Field(
                 description=(
-                    "Reuse or store the synthesized audio on disk for repeated phrases. Default: "
-                    "only for mode='notification'. Set true for a fixed phrase you will repeat, "
-                    "false for one-off text."
+                    "Reuse or store the synthesized audio on disk. Default false: text you write "
+                    "is one-off. Set true only for a fixed phrase you will repeat verbatim."
                 )
             ),
         ] = None,
@@ -120,6 +119,7 @@ def register_tools(mcp: MCPServer, holder: ServiceHolder) -> None:
                 cache=cache,
                 language=language,
                 instructions=instructions,
+                role="summary",
             )
         except VoxelloError as exc:
             raise ToolError(str(exc)) from exc
@@ -199,8 +199,8 @@ def register_tools(mcp: MCPServer, holder: ServiceHolder) -> None:
             bool | None,
             Field(
                 description=(
-                    "Reuse or store the synthesized audio on disk. Default true: notifications "
-                    "repeat, so the same message is synthesized once. Set false for one-off text."
+                    "Reuse or store the synthesized audio on disk. Default false: text you write "
+                    "is one-off. Set true only for a fixed phrase you will repeat verbatim."
                 )
             ),
         ] = None,
@@ -229,6 +229,7 @@ def register_tools(mcp: MCPServer, holder: ServiceHolder) -> None:
                 language=language,
                 voice=voice,
                 instructions=instructions,
+                role="summary",
             )
         except VoxelloError as exc:
             raise ToolError(str(exc)) from exc

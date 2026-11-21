@@ -1,6 +1,6 @@
 # Voxello roadmap
 
-Status as of 2026-09-17. The MVP described in the specification (phases 1-3, section 38) is
+Status as of 2026-11-21 (version 0.3.0). The MVP described in the specification (phases 1-3, section 38) is
 implemented: `speak`, `stop_speaking`, `get_status`, `notify`, queue with interrupt, VoiceStudio /
 omnivoice-server provider, desktop notifications, CLI, Claude Code skill and hook. This roadmap
 lists what is missing to make Voxello an everyday tool, in priority order.
@@ -247,6 +247,25 @@ server and cloning is CLI-only. Deviations: the cache sidecar needed no `instruc
 because the voice label already records `design:<attributes>`; VoiceStudio (`instruct`, no
 profile API) is not supported.
 
+## Milestone 7 — Agent notifications you can choose (done 2026-11-17)
+
+Goal: pick, for Claude Code and Codex, between cached fixed sentences, live messages and
+agent-written summaries, each with its own cloned or designed voice.
+
+Delivered: `integrations.phrases` (`cached` | `live` | `off`, voice or instructions, language,
+channels) and `integrations.summaries` (`on_request` | `always`, voice or instructions,
+`enforce`, `min_turn_seconds`) in `config.py`; `VoiceRole` and the role step in
+`resolve_voice`; MCP calls carry `role="summary"` and are not cached by default;
+`build_instructions(settings)` adds the always-summarize paragraph; `install.hook_delivery`
+applies the phrase mode; `voxello/hooks.py` and `voxello hook stop` (block decision, Codex
+end-of-turn sentence in a detached child, fail open on unreadable transcripts); the hook
+script's `stop [agent]` mode; `voxello install claude --stop-hook` and `voxello install codex`;
+`doctor` lines; per-project `.voxello.yaml` (allow-listed keys) so each project can have its own
+voices. Decisions in `docs/decisions/0002-agent-summaries.md`. Limitations: the Codex
+rollout format is not a stable interface, so the "already spoke" check for Codex is tolerant
+and fails open; the Codex paths were verified against the documentation and a local
+`codex-cli 0.169`, not in a live Codex session.
+
 ## Recommended order
 
 | Step | Item | Reason |
@@ -258,6 +277,7 @@ profile API) is not supported.
 | 5 | 3.2, 1.3 | Done: `voices_by_language`, `warm`, 1.3 |
 | 6 | Milestone 4 | Done: retry, `doctor --synth`, Windows CI leg and checklist, gated release |
 | 7 | Milestone 6 | Done: cloned voices on the server, voice design by attributes or by name |
+| 7b | Milestone 7 | Done: notification modes and a voice per kind of message, Codex hook |
 | 8 | Milestone 5 | On demand |
 
 Items 3.1 and 2.x were done before the first PyPI release (1.1) because they change the MCP

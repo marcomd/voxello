@@ -9,6 +9,11 @@ allowed-tools: mcp__voxello__notify mcp__voxello__speak mcp__voxello__get_status
 The user asked to hear about this task rather than watch the terminal. Do the task exactly as you
 normally would, then deliver a spoken notification through the Voxello MCP server.
 
+The tools are `mcp__voxello__notify` and `mcp__voxello__speak` in Claude Code; other agents
+(Codex) show them as the Voxello server's `notify` and `speak` tools. When the Voxello server
+instructions say the user wants to hear the outcome of every task, apply this skill to every
+task that takes more than a few seconds, even if the user did not ask in this conversation.
+
 ## When to notify
 
 Call `mcp__voxello__notify` exactly once, as the last tool call of the turn, in these cases:
@@ -40,10 +45,17 @@ full text stays in your written answer.
   "language": "it",
   "channels": ["voice", "desktop"],
   "priority": "normal",
-  "title": "Claude Code",
-  "client_id": "claude-code"
+  "client_id": "claude-code",
+  "cache": false
 }
 ```
+
+- `cache`: always `false`. The message is written for this task and will not repeat; fixed
+  phrases are cached by the hooks, not by you.
+- `voice` / `instructions` / `title`: leave them out. The user picks the voice for your
+  messages and the desktop title in Voxello's configuration, possibly per project; set them
+  only if the user asks for a particular voice in this conversation.
+- `client_id`: `codex` when you are Codex.
 
 - `language`: the ISO 639-1 code of the language the message is written in (`it` for an Italian
   message, `en` for English), so pronunciation matches the text. Always pass it; it must agree

@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
 from voxello import __version__
 from voxello.cli import cmd_doctor, describe_installation, main
-from voxello.config import Settings, describe_config_path
+from voxello.config import IntegrationsSettings, Settings, describe_config_path
 from voxello.errors import INVALID_LANGUAGE, TTS_PROVIDER_ERROR, VoxelloError
 from voxello.tts.base import VoiceInfo
 
@@ -304,6 +305,103 @@ def test_hook_notification_defaults_and_fallbacks(
     assert main(["hook", "notification", "-l", "xx"]) == 1
     assert "No hook phrases for language 'xx'" in capsys.readouterr().err
     assert len(fake_service.calls) == before
+
+
+def write_config(path: Path, monkeypatch: pytest.MonkeyPatch, text: str) -> None:
+    path.write_text(text, encoding="utf-8")
+    monkeypatch.setenv("VOXELLO_CONFIG", str(path))
+
+
+def test_hook_notification_reads_mode_voice_language_and_channels_from_config(
+    isolated_env: Path, fake_service, hook_stdin, monkeypatch: pytest.MonkeyPatch, capsys
+):
+    from voxello.install import hook_phrases
+
+    monkeypatch.delenv("VOXELLO_HOOK_CHANNELS", raising=False)
+    write_config(
+        isolated_env / "config.yaml",
+        monkeypatch,
+        "integrations:\n  phrases:\n    voice: clone:marco\n    language: en\n"
+        "    channels: [file]\n",
+    )
+    hook_stdin({"notification_type": "idle_prompt"})
+    assert main(["hook", "notification"]) == 0
+    assert fake_service.calls[-1] == (hook_phrases("en")["idle_prompt"], "clone:marco", "en")
+    assert json.loads(capsys.readouterr().out)["channels"] == {"file": "saved"}
+
+    # The environment variables and the arguments still win over the configuration.
+    monkeypatch.setenv("VOXELLO_HOOK_LANG", "it")
+    hook_stdin({"notification_type": "idle_prompt"})
+    assert main(["hook", "notification"]) == 0
+    assert fake_service.calls[-1][2] == "it"
+    hook_stdin({"notification_type": "permission_prompt"})  # not cached yet in English
+    assert main(["hook", "notification", "-l", "en"]) == 0
+    assert fake_service.calls[-1][2] == "en"
+
+
+def test_hook_notification_default_language_follows_speech_default(
+    isolated_env: Path, fake_service, hook_stdin, monkeypatch: pytest.MonkeyPatch
+):
+    from voxello.install import hook_phrases
+
+    monkeypatch.setenv("VOXELLO_HOOK_CHANNELS", "file")
+    monkeypatch.setenv("VOXELLO_LANGUAGE", "en")
+    hook_stdin({"notification_type": "idle_prompt"})
+    assert main(["hook", "notification"]) == 0
+    assert fake_service.calls[-1] == (hook_phrases("en")["idle_prompt"], None, "en")
+
+    # A default language without message files keeps the hook's own default (Italian).
+    monkeypatch.setenv("VOXELLO_LANGUAGE", "fr")
+    hook_stdin({"notification_type": "idle_prompt"})
+    assert main(["hook", "notification"]) == 0
+    assert fake_service.calls[-1] == (hook_phrases("it")["idle_prompt"], None, "it")
+
+
+def test_hook_notification_live_mode_is_not_cached(
+    isolated_env: Path, fake_service, hook_stdin, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("VOXELLO_HOOK_CHANNELS", "file")
+    write_config(
+        isolated_env / "config.yaml", monkeypatch, "integrations:\n  phrases:\n    mode: live\n"
+    )
+    for _ in range(2):
+        hook_stdin({"notification_type": "permission_prompt", "message": "Claude needs Bash"})
+        assert main(["hook", "notification"]) == 0
+    assert fake_service.calls == [("Claude needs Bash", None, "en")] * 2
+    assert main(["cache", "list"]) == 0
+
+
+def test_hook_notification_off_mode_drops_the_voice(
+    isolated_env: Path, fake_service, hook_stdin, monkeypatch: pytest.MonkeyPatch, capsys
+):
+    monkeypatch.setenv("VOXELLO_HOOK_CHANNELS", "voice")
+    hook_stdin({"notification_type": "idle_prompt"})
+    assert main(["hook", "notification", "--mode", "off"]) == 0
+    assert fake_service.calls == []
+    assert capsys.readouterr().out == ""
+
+    # Other channels are still delivered, without synthesizing for the voice.
+    hook_stdin({"notification_type": "idle_prompt"})
+    assert main(["hook", "notification", "--mode", "off", "--channels", "voice,file"]) == 0
+    assert json.loads(capsys.readouterr().out)["channels"] == {"file": "saved"}
+
+
+def test_cache_warm_hook_phrases_uses_the_phrase_voice(
+    isolated_env: Path, fake_service, monkeypatch: pytest.MonkeyPatch, hook_stdin, capsys
+):
+    """Warm and hook must compute the same cache keys, so they must pick the same voice."""
+    monkeypatch.setenv("VOXELLO_HOOK_CHANNELS", "file")
+    write_config(
+        isolated_env / "config.yaml",
+        monkeypatch,
+        "integrations:\n  phrases:\n    voice: clone:marco\n",
+    )
+    assert main(["cache", "warm", "--hook-phrases"]) == 0
+    assert {call[1] for call in fake_service.calls} == {"clone:marco"}
+    warmed = len(fake_service.calls)
+    hook_stdin({"notification_type": "idle_prompt"})
+    assert main(["hook", "notification"]) == 0
+    assert len(fake_service.calls) == warmed, "the hook hit the warmed entry"
 
 
 def test_speak_and_notify_accept_language(isolated_env: Path, fake_service, capsys):
@@ -664,3 +762,207 @@ def test_voice_changes_evict_cached_audio_while_the_cache_is_disabled(
     assert "(1 cached phrase dropped)" in capsys.readouterr().out
     cache = AudioCache(isolated_env / "cache", max_entries=20, max_age_days=30)
     assert [entry.voice for entry in cache.entries()] == ["nova"]
+
+
+class FakePopen:
+    """Records the detached child the Stop hook would start; never runs anything."""
+
+    started: ClassVar[list[FakePopen]] = []
+
+    def __init__(self, argv, **kwargs):
+        self.argv, self.kwargs = argv, kwargs
+        self.written = b""
+        self.stdin = self
+        FakePopen.started.append(self)
+
+    def write(self, data: bytes) -> None:
+        self.written += data
+
+    def close(self) -> None:
+        pass
+
+
+@pytest.fixture
+def popen(monkeypatch: pytest.MonkeyPatch):
+    FakePopen.started = []
+    monkeypatch.setattr("voxello.cli.subprocess.Popen", FakePopen)
+    return FakePopen.started
+
+
+def stop_payload(transcript: Path | None, **extra) -> dict:
+    return {
+        "hook_event_name": "Stop",
+        "stop_hook_active": False,
+        "transcript_path": str(transcript) if transcript else None,
+        **extra,
+    }
+
+
+def test_hook_stop_blocks_a_long_turn_without_a_summary(
+    isolated_env: Path, hook_stdin, monkeypatch: pytest.MonkeyPatch, popen, capsys
+):
+    from voxello.hooks import SUMMARY_REQUEST
+
+    write_config(
+        isolated_env / "config.yaml",
+        monkeypatch,
+        "integrations:\n  summaries:\n    mode: always\n    enforce: true\n"
+        "    min_turn_seconds: 0\n",
+    )
+    transcript = isolated_env / "t.jsonl"
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "user",
+                "timestamp": "2026-01-01T00:00:00Z",
+                "message": {"role": "user", "content": "go"},
+            }
+        )
+        + "\n"
+    )
+    hook_stdin(stop_payload(transcript))
+    assert main(["hook", "stop", "--agent", "claude-code"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"decision": "block", "reason": SUMMARY_REQUEST}
+    assert popen == []
+
+
+def test_hook_stop_prints_an_empty_object_when_nothing_to_do(
+    isolated_env: Path, hook_stdin, popen, capsys
+):
+    """Codex wants JSON on stdout when a Stop hook exits 0; `{}` is valid for both agents."""
+    hook_stdin(stop_payload(None))
+    assert main(["hook", "stop"]) == 0  # default agent: claude-code
+    assert capsys.readouterr().out.strip() == "{}"
+    hook_stdin("garbage")
+    assert main(["hook", "stop", "--agent", "claude-code"]) == 0
+    assert capsys.readouterr().out.strip() == "{}"
+    assert popen == []
+
+
+def test_hook_stop_codex_speaks_the_phrase_in_a_detached_child(
+    isolated_env: Path, hook_stdin, popen, capsys
+):
+    hook_stdin(stop_payload(None))
+    assert main(["--config", str(isolated_env / "c.yaml"), "hook", "stop", "--agent", "codex"]) == 0
+    assert capsys.readouterr().out.strip() == "{}"
+    (child,) = popen
+    # -P: the hook runs in the project, whose directory must not shadow the voxello package.
+    assert child.argv[1:4] == ["-P", "-m", "voxello"]
+    assert child.kwargs["cwd"] == str(Path.home())
+    assert child.argv[4:] == [
+        "--config",
+        str(isolated_env / "c.yaml"),
+        "hook",
+        "notification",
+        "--priority",
+        "normal",
+    ]
+    assert child.kwargs["start_new_session"] is True
+    assert json.loads(child.written) == {"notification_type": "codex_turn_complete"}
+
+
+def test_codex_turn_complete_phrase_is_in_every_message_file():
+    from voxello.install import hook_languages, hook_phrases
+
+    for language in hook_languages():
+        assert hook_phrases(language)["codex_turn_complete"].startswith("Codex")
+
+
+async def test_doctor_shows_what_the_agent_integrations_say_and_with_which_voice(
+    doctor_settings: Settings, doctor_provider: FakeProvider, capsys: pytest.CaptureFixture[str]
+):
+    await cmd_doctor(doctor_settings, None, provider=doctor_provider)
+    lines = capsys.readouterr().out.splitlines()
+    assert "  phrases: mode=cached voice=default" in lines
+    assert "  summaries: mode=on_request voice=default" in lines
+
+    doctor_settings.integrations = IntegrationsSettings(
+        phrases={"mode": "live", "voice": "nope", "language": "en", "channels": ["desktop"]},
+        summaries={"mode": "always", "enforce": True, "instructions": "female"},
+    )
+    await cmd_doctor(doctor_settings, None, provider=doctor_provider)
+    lines = capsys.readouterr().out.splitlines()
+    assert "  phrases: mode=live voice=nope language=en channels=desktop" in lines
+    assert (
+        '  summaries: mode=always (enforced by the Stop hook, turns >= 60 s) voice=design:"female"'
+        in lines
+    )
+    assert "    integrations.phrases.voice=nope: WARNING not in the server's voice list" in lines
+
+
+def test_detached_child_gets_an_absolute_config_path(
+    isolated_env: Path, hook_stdin, monkeypatch: pytest.MonkeyPatch, popen
+):
+    monkeypatch.chdir(isolated_env)
+    hook_stdin(stop_payload(None))
+    assert main(["--config", "c.yaml", "hook", "stop", "--agent", "codex"]) == 0
+    assert popen[0].argv[4] == "--config"
+    config = Path(popen[0].argv[5])
+    assert config.is_absolute() and config.resolve() == (isolated_env / "c.yaml").resolve()
+
+
+def test_hook_channels_default_and_detached_child_without_config(
+    isolated_env: Path, hook_stdin, monkeypatch: pytest.MonkeyPatch, popen
+):
+    from voxello.cli import hook_channels
+
+    monkeypatch.delenv("VOXELLO_HOOK_CHANNELS", raising=False)
+    assert hook_channels(Settings(), None) == ["voice", "desktop"]
+    hook_stdin(stop_payload(None))
+    assert main(["hook", "stop", "--agent", "codex"]) == 0
+    assert popen[0].argv[4:] == ["hook", "notification", "--priority", "normal"]
+
+
+def test_hooks_use_the_project_file_of_the_event_cwd(
+    isolated_env: Path, fake_service, hook_stdin, monkeypatch: pytest.MonkeyPatch, popen
+):
+    """Two projects, two voices: the hook picks the project from the event's `cwd`."""
+    from voxello.config import PROJECT_CONFIG_NAME
+
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("VOXELLO_PROJECT_DIR", raising=False)
+    monkeypatch.setenv("VOXELLO_HOOK_CHANNELS", "file")
+    voices = {"alfa": "clone:marco", "beta": "clone:anna"}
+    for name, voice in voices.items():
+        root = isolated_env / name
+        (root / ".git").mkdir(parents=True)
+        (root / PROJECT_CONFIG_NAME).write_text(
+            f"integrations:\n  phrases: {{voice: '{voice}'}}\n", encoding="utf-8"
+        )
+    for name in voices:
+        hook_stdin({"notification_type": "idle_prompt", "cwd": str(isolated_env / name / "src")})
+        assert main(["hook", "notification"]) == 0
+    assert [call[1] for call in fake_service.calls] == ["clone:marco", "clone:anna"]
+
+    # The detached Codex phrase keeps the event's cwd, so it gets the same project voice.
+    hook_stdin(stop_payload(None, cwd=str(isolated_env / "beta")))
+    assert main(["hook", "stop", "--agent", "codex"]) == 0
+    assert json.loads(popen[0].written) == {
+        "notification_type": "codex_turn_complete",
+        "cwd": str(isolated_env / "beta"),
+    }
+
+
+async def test_doctor_reports_the_project_file_and_ignored_keys(
+    doctor_settings: Settings,
+    doctor_provider: FakeProvider,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    from voxello.config import PROJECT_CONFIG_NAME
+
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    root = tmp_path / "alfa"
+    (root / ".git").mkdir(parents=True)
+    monkeypatch.setenv("VOXELLO_PROJECT_DIR", str(root))
+    await cmd_doctor(doctor_settings, None, provider=doctor_provider)
+    assert f"Project config: none (searched from {root})" in capsys.readouterr().out
+
+    (root / PROJECT_CONFIG_NAME).write_text(
+        "notifications: {title: Alfa}\ntts: {provider: voicestudio}\n", encoding="utf-8"
+    )
+    await cmd_doctor(doctor_settings, None, provider=doctor_provider)
+    out = capsys.readouterr().out
+    assert f"Project config: {root / PROJECT_CONFIG_NAME}" in out
+    assert "WARNING ignored (not allowed in a project file): tts" in out

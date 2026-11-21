@@ -25,6 +25,7 @@ from voxello.core.models import (
     StopResult,
     TTSHealth,
     VoiceChoice,
+    VoiceRole,
 )
 from voxello.core.voice_design import normalize_instructions
 from voxello.errors import (
@@ -207,6 +208,7 @@ class VoxelloService:
         cache: bool | None = None,
         language: str | None = None,
         instructions: str | None = None,
+        role: VoiceRole | None = None,
     ) -> SpeechResult:
         request_id = new_request_id()
         record = RequestRecord(
@@ -227,7 +229,7 @@ class VoxelloService:
             record.language = language
             # The effective voice is fixed here (roadmap 3.2 precedence, then named voice
             # designs) so the provider and the cache key see the same value.
-            choice = self._resolve_voice(self._validate_voice(voice), language, instructions)
+            choice = self._resolve_voice(self._validate_voice(voice), language, instructions, role)
             voice = choice.voice
             record.instructions = choice.instructions
             if play and self.playback is None:
@@ -257,7 +259,7 @@ class VoxelloService:
             # server (roadmap 2.2). The cache only ever holds short, repeatable phrases.
             cache_key = (
                 self._cache_key(text, choice, language)
-                if self._cache_allowed(text, mode, cache)
+                if self._cache_allowed(text, mode, cache, role)
                 else None
             )
             entry = (
@@ -436,6 +438,7 @@ class VoxelloService:
         language: str | None = None,
         voice: str | None = None,
         instructions: str | None = None,
+        role: VoiceRole | None = None,
     ) -> NotifyResult:
         channels = channels or ["voice", "desktop"]
         for channel in channels:
@@ -470,6 +473,7 @@ class VoxelloService:
                     language=language,
                     voice=voice,
                     instructions=instructions,
+                    role=role,
                 )
                 request_id = speech.request_id
                 saved_path = speech.saved_path
@@ -546,16 +550,21 @@ class VoxelloService:
         return normalize_language(language, self.settings.speech.default_language)
 
     def _resolve_voice(
-        self, voice: str | None, language: str, instructions: str | None
+        self, voice: str | None, language: str, instructions: str | None, role: VoiceRole | None
     ) -> VoiceChoice:
-        return resolve_voice(self.settings, voice, language, instructions)
+        return resolve_voice(self.settings, voice, language, instructions, role=role)
 
-    def _cache_allowed(self, text: str, mode: SpeechMode, cache: bool | None) -> bool:
+    def _cache_allowed(
+        self, text: str, mode: SpeechMode, cache: bool | None, role: VoiceRole | None = None
+    ) -> bool:
         """Cache policy (roadmap 2.2): notifications by default, anything on request,
-        never beyond the configured length bounds or when the cache is disabled."""
+        never beyond the configured length bounds or when the cache is disabled.
+
+        Text an agent wrote itself (``role="summary"``) is one-off, so it is cached only on
+        an explicit request even when it arrives as a notification."""
         if self.audio_cache is None or not self.settings.cache.enabled or cache is False:
             return False
-        if cache is None and mode != "notification":
+        if cache is None and (mode != "notification" or role == "summary"):
             return False
         bounds = self.settings.cache
         return bounds.min_text_chars <= len(text) <= bounds.max_text_chars
@@ -626,7 +635,12 @@ def normalize_language(language: str | None, default: str) -> str:
 
 
 def resolve_voice(
-    settings: Settings, voice: str | None, language: str, instructions: str | None = None
+    settings: Settings,
+    voice: str | None,
+    language: str,
+    instructions: str | None = None,
+    *,
+    role: VoiceRole | None = None,
 ) -> VoiceChoice:
     """Effective voice of a request.
 
@@ -636,6 +650,11 @@ def resolve_voice(
     (request voice, ``speech.voices_by_language``, global ``tts.voicestudio.voice``) and a
     result naming an entry of ``speech.voice_designs`` becomes those instructions. Neither
     leaves the choice to the server.
+
+    ``role`` names the kind of agent message: the voice or instructions configured for it in
+    ``integrations.phrases`` / ``integrations.summaries`` come right after the request's own,
+    before ``voices_by_language``, so a cloned or designed voice can mark hook sentences and
+    agent summaries in every language.
 
     The service fixes the voice once with this function so the provider call and the cache
     key agree; ``doctor --synth`` uses it to test the voice a request would really get.
@@ -648,6 +667,13 @@ def resolve_voice(
                 "design and a design overrides a preset.",
             )
         return VoiceChoice(None, normalize_instructions(instructions))
+    if not voice and role is not None:
+        role_settings = (
+            settings.integrations.phrases if role == "phrase" else settings.integrations.summaries
+        )
+        if role_settings.instructions is not None:
+            return VoiceChoice(None, role_settings.instructions)
+        voice = role_settings.voice
     candidate = (
         voice or settings.speech.voices_by_language.get(language) or settings.tts.voicestudio.voice
     )

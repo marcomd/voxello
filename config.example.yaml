@@ -35,6 +35,20 @@ notifications:
   desktop: true
   title: Voxello
 
+integrations:                           # what Claude Code and Codex say, and with which voice
+                                        # per project: .voxello.yaml at the repository root
+  phrases:                              # fixed hook sentences (permission prompt, idle, ...)
+    mode: cached                        # cached | live (the event's own message) | off
+    # voice: clone:marco                # or instructions: "male, middle-aged" (never both)
+    # language: it                      # default: speech.default_language
+    # channels: [voice, desktop]
+  summaries:                            # messages the agent writes (MCP speak / notify)
+    mode: on_request                    # on_request | always (a summary at every task end)
+    # voice: narrator                   # a name from speech.voice_designs, clone:<id>, ...
+    # instructions: "female, young adult"
+    enforce: false                      # with always: the Stop hook asks for a missing summary
+    min_turn_seconds: 60                # shorter turns are never asked for one
+
 storage:
   temp_retention_minutes: 10
   cleanup_on_start: true

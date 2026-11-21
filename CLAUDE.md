@@ -31,13 +31,15 @@ uv run voxello doctor [--synth] [-l en]           # check config, TTS server, vo
 uv run voxello speak "text" [--save] [--cache] [-l en]
 uv run voxello notify "text" --channels voice,desktop [--no-cache] [-l en]
 echo '{"notification_type":"idle_prompt"}' | uv run voxello hook notification -l it   # what the Claude Code hook runs
+echo '{"stop_hook_active":false}' | uv run voxello hook stop --agent codex   # what the Stop hook runs
 uv run voxello cache list|clear                   # audio cache: hash, size, chars, voice, last use
 uv run voxello cache warm --hook-phrases --language it|en   # or: cache warm FILE, cache warm -
 uv run voxello speak "text" -l en -i "female, young adult, high pitch"   # voice design
 uv run voxello voice list|clone NAME FILE [--ref-text T] [--yes]|update NAME|delete NAME
 uv run voxello serve                              # MCP server over stdio (what agents run)
 uv run voxello config init|path|show
-uv run voxello install claude [--yes] [--claude-dir DIR]   # copy skill + hook into ~/.claude, offer settings.json entry
+uv run voxello install claude [--yes] [--stop-hook] [--claude-dir DIR]   # skill + hook into ~/.claude, offer settings.json entries
+uv run voxello install codex [--yes] [--codex-dir DIR]     # skill + hook into ~/.codex, offer the hooks.json Stop entry
 uv build                                          # sdist + wheel; version comes from src/voxello/__init__.py
 ```
 
@@ -50,9 +52,11 @@ need no decorator.
 Layers, top to bottom, each depending only on the ones below:
 
 - `mcp/server.py` builds the `MCPServer` with a lifespan that creates and starts a `VoxelloService`;
-  `mcp/tools.py` registers the four tools. Tools are thin: they call the service and convert
-  `VoxelloError` into `ToolError`. The server `INSTRUCTIONS` string is what agents see; keep it in
-  sync with tool descriptions if behaviour changes.
+  `mcp/tools.py` registers the four tools. Tools are thin: they call the service (always with
+  `role="summary"`, since MCP text is written by the agent) and convert `VoxelloError` into
+  `ToolError`. `build_instructions(settings)` is what agents see: `INSTRUCTIONS` plus the
+  always-summarize paragraph when `integrations.summaries.mode` is `always`; keep it in sync
+  with tool descriptions if behaviour changes.
 - `core/service.py` (`VoxelloService`) is the orchestrator and holds all business rules: text
   validation and length limits, request ID and `RequestRecord` state machine (`core/models.py`),
   serialising synthesis behind `_synth_lock`, temp/output storage, and mapping `notify` priorities
@@ -73,7 +77,10 @@ Layers, top to bottom, each depending only on the ones below:
   `instructions` (validated by `core/voice_design.normalize_instructions`) bypass configured
   voices and are an `invalid_parameter` error together with `voice`; a resolved name found in
   `speech.voice_designs` becomes those instructions. Never send both to the server: a profile
-  wins over instructions there.
+  wins over instructions there. `speak`/`notify` also take `role: VoiceRole | None`
+  (`"phrase"` for hook sentences, `"summary"` for agent text): the voice or instructions of
+  `integrations.phrases`/`.summaries` come right after the request's own, before
+  `voices_by_language`. `role="summary"` with `cache=None` is never cached.
 - `core/voices.py` (`VoiceLibrary`) is the policy behind `voxello voice`: profile-id and
   reference-audio checks, the 3-10 s warning, and `AudioCache.evict_voice({id, "clone:id"})`
   after every change. It talks to a `VoiceProfileStore` (`tts/base.py`), implemented by the
@@ -111,8 +118,20 @@ Layers, top to bottom, each depending only on the ones below:
 - `cli.py` `cmd_doctor` accepts an injected `TTSProvider` for tests; `describe_voices` groups the
   server's voices by language and warns (without failing) when a configured voice is not listed;
   `--synth` times one sample phrase with the voice `core.service.resolve_voice` would pick.
+- `hooks.py` is the pure Stop-hook policy behind `voxello hook stop --agent claude-code|codex`:
+  `read_turn` finds the last prompt in a Claude Code transcript or Codex rollout and whether a
+  Voxello `notify`/`speak` call followed it; `stop_decision` returns `Block` (summaries
+  `always` + `enforce`, turn >= `min_turn_seconds`, never with `stop_hook_active`),
+  `SpeakPhrase` (Codex end of turn) or `Nothing`, and fails open on unreadable transcripts.
+  The CLI prints the decision JSON (`{}` otherwise: Codex requires JSON on exit 0) and speaks
+  phrases through a detached `voxello hook notification` child.
 - `config.py` uses `pydantic-settings` with a YAML file (path from `platformdirs`, override with
-  `VOXELLO_CONFIG`) and `VOXELLO_*` env vars, nested keys with `__`. `speech.default_language`
+  `VOXELLO_CONFIG`) and `VOXELLO_*` env vars, nested keys with `__`. `load_settings` layers a
+  project `.voxello.yaml` (found by `find_project_config` from `project_start_dir`: the
+  `VOXELLO_PROJECT_DIR` override, the hook payload `cwd`, `$CLAUDE_PROJECT_DIR`, the cwd; up to
+  the `.git` root, never the home dir) between the user file and the env, keeping only
+  `PROJECT_KEYS` so a repository cannot redirect `tts.*`; `cli.main` reads the hook payload
+  before loading settings for that reason. `speech.default_language`
   (alias `VOXELLO_LANGUAGE`) and `speech.voices_by_language` hold the language defaults;
   `tts.voicestudio.language` is deprecated and migrated into `speech.default_language` by a
   `Settings` validator that logs a warning (never prints).
@@ -156,15 +175,20 @@ drift, so edit the package copy and re-copy. The skill makes Claude end a task w
 call when the user asks to be told by voice, passing `language` consistent with the message. The
 hook script only resolves the CLI (it prefers `voxello` on the PATH, then `~/.local/bin/voxello`,
 then `uv run --directory "$VOXELLO_REPO"`, then the checkout it lives in) and execs
-`voxello hook notification --language "$VOXELLO_HOOK_LANG" --channels "$VOXELLO_HOOK_CHANNELS"`
-with the Notification JSON on stdin (Italian by default, `VOXELLO_HOOK_LANG=en`,
-`VOXELLO_HOOK_CHANNELS=desktop` to silence). That command (`cli.cmd_hook_notification`) picks the
-sentence with `install.hook_text()` from `src/voxello/assets/claude/messages/{it,en}.yaml`, the
-single source of the hook sentences, also read by `voxello cache warm --hook-phrases`; the script
+`voxello hook notification` with the Notification JSON on stdin, adding `--language`/`--channels`
+only when `VOXELLO_HOOK_LANG`/`VOXELLO_HOOK_CHANNELS` are set, so `integrations.phrases` in
+config.yaml decides otherwise. With `stop [agent]` it execs `voxello hook stop --agent` and keeps
+stdout (the decision). That command (`cli.cmd_hook_notification`) applies
+`integrations.phrases.mode` with `install.hook_delivery()` and picks the sentence with
+`install.hook_text()` from `src/voxello/assets/claude/messages/{it,en}.yaml`, the single source
+of the hook sentences (including `codex_turn_complete`), also read by
+`voxello cache warm --hook-phrases` (same language precedence and phrase voice); the script
 contains no sentences and needs neither `jq` nor `python3`, so adding a language is adding a YAML
 file (`tests/test_hook.py` checks the script stays free of sentences and that every message file
 has the same keys). Both are registered at user scope, not in a project `.mcp.json` (Claude Code
-warns on duplicate scopes).
+warns on duplicate scopes). `voxello install codex` copies the same skill and script into
+`$CODEX_HOME` and offers the Stop entry for `hooks.json` (same JSON shape); it never edits
+`config.toml`. Design rationale: `docs/decisions/0002-agent-summaries.md`.
 
 ## Releasing
 

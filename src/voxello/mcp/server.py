@@ -26,7 +26,28 @@ default. Leave `voice` and `instructions` unset unless the user asks for a parti
 name from their config; `instructions` designs one from attributes such as `female, young \
 adult, high pitch` (never both). Use `stop_speaking` to interrupt playback and `get_status` \
 to check what is playing and whether the TTS provider is reachable. Voxello speaks exactly \
-the text you pass; it never summarizes or rewrites it."""
+the text you pass; it never summarizes or rewrites it. Text you write yourself is one-off: \
+pass `cache: false` for it (the voice the user chose for your messages is applied for you)."""
+
+ALWAYS_SUMMARIZE = """
+
+The user wants to hear the outcome of every task. When a task that took more than a few \
+seconds ends (done, partly done, blocked waiting for the user, or failed), call `notify` \
+once, as your last tool call, with a spoken summary of one or two sentences (at most about \
+250 characters): what was done and the outcome first, then anything the user must do. No \
+code, paths, URLs or identifiers. Pass `language` matching the summary, `cache: false`, and \
+`priority: high` when you are blocked or the task failed. Skip it for quick exchanges."""
+
+
+def build_instructions(settings: Settings) -> str:
+    """Server instructions shown to every MCP client; they follow ``integrations.summaries``.
+
+    With ``mode: always`` this is what makes any client (Claude Code, Codex, ...) end its
+    tasks with a spoken summary, without a client-specific skill.
+    """
+    if settings.integrations.summaries.mode == "always":
+        return INSTRUCTIONS + ALWAYS_SUMMARIZE
+    return INSTRUCTIONS
 
 
 def create_server(settings: Settings, service: VoxelloService | None = None) -> MCPServer:
@@ -48,7 +69,7 @@ def create_server(settings: Settings, service: VoxelloService | None = None) -> 
         name=settings.server.name,
         title="Voxello",
         description="A local voice and notification layer for AI agents.",
-        instructions=INSTRUCTIONS,
+        instructions=build_instructions(settings),
         version=__version__,
         lifespan=lifespan,
     )

@@ -138,3 +138,92 @@ def test_claude_config_dir_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 class _NotATty:
     def isatty(self) -> bool:
         return False
+
+
+HOOK_NAME = "voxello-notification-hook.sh"
+
+
+def test_stop_hook_flag_registers_a_synchronous_stop_entry(
+    claude_dir: Path, capsys: pytest.CaptureFixture[str]
+):
+    settings = claude_dir / "settings.json"
+    assert main(["install", "claude", "--claude-dir", str(claude_dir), "--yes", "--stop-hook"]) == 0
+    data = json.loads(settings.read_text())
+    assert len(data["hooks"]["Notification"]) == 1
+    (stop,) = data["hooks"]["Stop"]
+    assert "matcher" not in stop, "Stop events have no matcher"
+    (hook,) = stop["hooks"]
+    assert hook["command"] == f"{claude_dir / 'hooks' / HOOK_NAME} stop"
+    assert "async" not in hook, "its stdout is the decision Claude Code reads"
+    assert hook["timeout"] == install.STOP_HOOK_TIMEOUT_SECONDS
+    assert "integrations" in capsys.readouterr().out, "points to the summaries settings"
+
+    before = settings.read_text()
+    assert main(["install", "claude", "--claude-dir", str(claude_dir), "--yes", "--stop-hook"]) == 0
+    assert settings.read_text() == before, "idempotent per event"
+
+
+def test_without_stop_hook_flag_no_stop_entry(claude_dir: Path):
+    assert main(["install", "claude", "--claude-dir", str(claude_dir), "--yes"]) == 0
+    assert "Stop" not in json.loads((claude_dir / "settings.json").read_text())["hooks"]
+
+
+def test_merge_is_per_event(claude_dir: Path):
+    settings = claude_dir / "settings.json"
+    hook_path = claude_dir / "hooks" / HOOK_NAME
+    assert install.merge_hook_into_settings(settings, install.hook_settings_entry(hook_path))
+    assert not install.hook_registered(settings, "Stop")
+    stop = install.stop_settings_entry(hook_path, "claude-code")
+    assert install.merge_hook_into_settings(settings, stop, "Stop") is True
+    assert install.hook_registered(settings, "Stop")
+    assert install.merge_hook_into_settings(settings, stop, "Stop") is False
+
+
+@pytest.fixture
+def codex_dir(tmp_path: Path) -> Path:
+    return tmp_path / "codex"
+
+
+def test_install_codex_copies_skill_and_hook_and_offers_hooks_json(
+    codex_dir: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr("sys.stdin", _NotATty())
+    assert main(["install", "codex", "--codex-dir", str(codex_dir)]) == 0
+    out = capsys.readouterr().out
+    assert (codex_dir / "skills" / "voice-notify" / "SKILL.md").read_bytes() == (
+        install.asset_bytes("claude", "skills", "voice-notify", "SKILL.md")
+    )
+    assert (codex_dir / "hooks" / HOOK_NAME).is_file()
+    assert not (codex_dir / "hooks.json").exists(), "never written without consent"
+    assert '"Stop"' in out and "--yes" in out
+    assert "[mcp_servers.voxello]" in out, "config.toml is only shown, never edited"
+    assert not (codex_dir / "config.toml").exists()
+
+
+def test_install_codex_yes_merges_hooks_json(codex_dir: Path):
+    hooks_json = codex_dir / "hooks.json"
+    hooks_json.parent.mkdir()
+    other = {"hooks": [{"type": "command", "command": "notify-me"}]}
+    hooks_json.write_text(json.dumps({"hooks": {"Stop": [other]}}))
+    assert main(["install", "codex", "--codex-dir", str(codex_dir), "--yes"]) == 0
+    stops = json.loads(hooks_json.read_text())["hooks"]["Stop"]
+    assert stops[0] == other
+    assert stops[1]["hooks"][0]["command"] == f"{codex_dir / 'hooks' / HOOK_NAME} stop codex"
+    assert "async" not in stops[1]["hooks"][0]
+    assert main(["install", "codex", "--codex-dir", str(codex_dir), "--yes"]) == 0
+    assert len(json.loads(hooks_json.read_text())["hooks"]["Stop"]) == 2
+
+
+def test_install_codex_flags_and_home(
+    codex_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    assert main(["install", "codex", "--codex-dir", str(codex_dir), "--no-hook"]) == 0
+    assert (codex_dir / "skills").is_dir() and not (codex_dir / "hooks").exists()
+    assert main(["install", "codex", "--codex-dir", str(tmp_path / "c2"), "--no-skill", "-y"]) == 0
+    assert not (tmp_path / "c2" / "skills").exists()
+    assert (tmp_path / "c2" / "hooks.json").is_file()
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "from-env"))
+    assert install.default_codex_dir() == tmp_path / "from-env"
+    monkeypatch.delenv("CODEX_HOME")
+    assert install.default_codex_dir() == Path.home() / ".codex"

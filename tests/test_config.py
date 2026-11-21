@@ -155,3 +155,54 @@ def test_provider_retry_settings_defaults_and_bounds():
         Settings(tts={"voicestudio": {"connect_timeout_seconds": 0}})
     with pytest.raises(ValidationError, match="retry_backoff_seconds"):
         Settings(tts={"voicestudio": {"retry_backoff_seconds": -1}})
+
+
+def test_integrations_defaults_keep_todays_behaviour():
+    integrations = Settings().integrations
+    assert integrations.phrases.mode == "cached"
+    assert integrations.phrases.voice is None
+    assert integrations.phrases.instructions is None
+    assert integrations.phrases.language is None
+    assert integrations.phrases.channels is None
+    assert integrations.summaries.mode == "on_request"
+    assert integrations.summaries.voice is None
+    assert integrations.summaries.enforce is False
+    assert integrations.summaries.min_turn_seconds == 60
+
+
+def test_integrations_voice_per_message_type():
+    settings = Settings(
+        integrations={
+            "phrases": {"mode": "live", "voice": "clone:marco", "language": "en"},
+            "summaries": {"mode": "always", "instructions": " Female,Young Adult "},
+        }
+    )
+    assert settings.integrations.phrases.mode == "live"
+    assert settings.integrations.phrases.voice == "clone:marco"
+    assert settings.integrations.summaries.instructions == "female, young adult"
+
+
+@pytest.mark.parametrize(
+    ("integrations", "match"),
+    [
+        ({"phrases": {"voice": "a", "instructions": "female"}}, "not both"),
+        ({"summaries": {"voice": "a", "instructions": "female"}}, "not both"),
+        ({"summaries": {"instructions": "female, italian accent"}}, "summaries.instructions"),
+        ({"phrases": {"mode": "loud"}}, "mode"),
+        ({"summaries": {"mode": "never"}}, "mode"),
+        ({"phrases": {"language": "ita"}}, "language"),
+        ({"phrases": {"channels": ["voice", "pager"]}}, "channels"),
+        ({"phrases": {"voice": " "}}, "voice"),
+        ({"summaries": {"min_turn_seconds": -1}}, "min_turn_seconds"),
+    ],
+)
+def test_integrations_validation(integrations: dict, match: str):
+    with pytest.raises(ValidationError, match=match):
+        Settings(integrations=integrations)
+
+
+def test_example_config_documents_integrations():
+    assert "integrations:" in EXAMPLE_CONFIG
+    loaded = load_settings(REPO / "config.example.yaml")
+    assert loaded.integrations.phrases.mode == "cached"
+    assert loaded.integrations.summaries.mode == "on_request"
