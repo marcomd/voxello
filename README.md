@@ -128,6 +128,15 @@ voxello voice update marco --audio ~/better.wav # or --ref-text "..."
 voxello voice delete marco
 ```
 
+A recording you already have (a phone memo, a longer reading, any format ffmpeg reads) can be
+cleaned first, as `voxello voice record` does, and cut to a 3-10 s window; the clean clip is
+kept in `storage.recordings_dir`:
+
+```bash
+voxello voice clone narratore ~/lettura.m4a --prepare --start 12.5 --duration 8 \
+  --ref-text "The words spoken in those eight seconds."
+```
+
 Without `--ref-text` the server transcribes the recording with Whisper. `clone` asks you to
 confirm you have the speaker's permission (`--yes` skips the prompt): only clone voices whose
 owner agreed, and never treat a voice as proof of identity. Cloning is CLI-only; agents can use
@@ -216,6 +225,18 @@ voxello cache clear
 voxello speak "Done." -l en -i "male, elderly, whisper"   # voice design (omnivoice-server)
 voxello speak "Fatto." --voice clone:marco      # a voice cloned with `voxello voice clone`
 ```
+
+## Review a narrated text or dialogue
+
+`voxello dialogue` splits a UTF-8 text into lines, renders a take for each voice in
+`cast.yaml`, and lets you review them in your terminal. Approve with Enter, regenerate with
+`r`, pick a take with `1`-`9`, replay with `p`, listen in context with `c`, edit with `e`,
+change register with `g`, or adjust speed with `+`/`-`. Quit with `q` and resume later;
+approvals, take selections and the review position are saved after each action.
+
+See [the review walkthrough](docs/dialogue-review.md) for a short test with a cloned narrator
+and the workflow for a chapter or an existing sample file. Whole-chapter playback and export
+are planned in roadmap 8.6.
 
 ## Register with your agent
 

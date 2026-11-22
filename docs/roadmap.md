@@ -417,7 +417,7 @@ are named by the first 16 hex digits of the fingerprint; older takes are kept. R
 a project `check` rejects and saves `state.json` after every line. First real run (example2,
 22 lines, omnivoice-server on Apple silicon): 25 s.
 
-### 8.5 Review loop
+### 8.5 Review loop — done
 
 `dialogue review [--from ID] [--pending] [--flagged]` (`dialogue/review.py` holds the pure
 state machine, `cli.py` the terminal I/O): shows id, speaker, register, `text`, `tts_text`
@@ -432,6 +432,43 @@ take. Flagged lines can be reviewed first.
 Acceptance: every action persists before the next prompt; quitting and restarting resumes
 where review stopped. Tests: the state machine with scripted keys, `FakePlayer`, QA functions
 on synthetic PCM.
+
+As built (details settled before implementation):
+
+- `dialogue/review.py` is pure: `step(review, view, key)` returns the new queue position and
+  effects (`Approve`, `Select`, `NewTake`, `Play`, `PlayContext`, `EditText`, `SetSpeed`,
+  `ChooseRegister`, `Notice`, `Quit`); `dialogue/review_session.py` executes them with an
+  injected terminal, player and provider; `dialogue/commands.py` owns the terminal (single
+  keys in cbreak mode on POSIX, `msvcrt` on Windows, `$VISUAL`/`$EDITOR` for `e`). Any key
+  stops the playing take first; the arrows move like `n`/`b`. Ctrl-C keeps the position and
+  exits with 130.
+- `state.json` stays version 1 with three optional additions: `review.position` (the line
+  shown last; `null` after a finished review, which then restarts at the first line not
+  approved), `lines.X.selected` (the take picked with `1`-`9` or the new one from `r`; else
+  the latest current take is the chosen one) and `takes[].qa`, the take's signal measures,
+  computed when the take is stored (by `render` too) and once for older takes. Flags are
+  recomputed from them at every review because a speaker's usual rate changes with the takes.
+- `r` uses the seed after the highest one among the line's current takes. `e`, `g`, `+`/`-`
+  go through `Project.edit_line` (`apply_annotations` plus `check` on that line, so an
+  unknown tag is refused instead of blocking the project) and render again with the seed of
+  the chosen take; older takes stay on disk and become current again if the edit is undone.
+  A line without a current take is rendered when review reaches it, once: after a failure
+  only `r` retries.
+- `c` joins the previous line (its approved take, else its chosen one), the take and the next
+  line with `pauses_ms` (`script.pause_between`: break, paragraph, speaker change, same
+  speaker) into one temporary WAV (`dialogue/audio.py`, reused by 8.6); takes in another
+  format fall back to the take alone.
+- QA thresholds, tuned on example2 (OmniVoice clones lead with up to 580 ms of silence on
+  short lines; about 14 characters per second): silence is a 20 ms window under -45 dBFS;
+  leading silence over 700 ms, trailing over 900 ms; clipping is 3 consecutive samples at
+  32700 or more; near-silent is RMS under -45 dBFS or under 300 ms of sound. The rate counts
+  letters and digits of `tts_text` without tags over the duration minus leading and trailing
+  silence, at speed 1.0; lines under 20 characters are not judged. The usual rate is the
+  speaker's median over at least 5 lines, else the median of all lines, else 14; flags below
+  0.7x or above 1.4x. The example2 takes raise no flags.
+- `voice clone NAME FILE --prepare [--start S] [--duration D]` came with it, so a narrator
+  can be cloned from a recording made elsewhere: the `voice record` cleanup (`FfmpegCleaner`,
+  any platform), a window of the file, the clip kept in `storage.recordings_dir`.
 
 ### 8.6 Play-through and export
 
@@ -474,8 +511,9 @@ the speaker's consent.
 | 7b | Milestone 7 | Done: notification modes and a voice per kind of message, Codex hook |
 | 8 | 8.1, 8.2 | Done: per-request seed/speed; guided recording, useful on its own for better clones |
 | 9 | 8.3, 8.4 | Done: segments, annotation and reproducible takes; a dialogue renders end to end |
-| 10 | 8.5, 8.6, 8.7 | Review, export and the skill that drives it |
-| 11 | Milestone 5 | On demand |
+| 10 | 8.5 | Done: review by ear with single keys, QA flags, resumable |
+| 11 | 8.6, 8.7 | Export and the skill that drives it |
+| 12 | Milestone 5 | On demand |
 
 Items 3.1 and 2.x were done before the first PyPI release (1.1) because they change the MCP
 tool signatures and the configuration layout: better to do that before external installations

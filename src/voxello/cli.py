@@ -41,7 +41,7 @@ from voxello.logging_setup import configure_logging
 from voxello.tts.base import TTSProvider, VoiceInfo
 
 if TYPE_CHECKING:
-    from voxello.core.voices import VoiceChange
+    from voxello.core.voices import VoiceChange, VoiceLibrary
     from voxello.recording.registers import ReadingScript
     from voxello.recording.session import Clip
 
@@ -238,6 +238,23 @@ def build_parser() -> argparse.ArgumentParser:
     clone.add_argument("name", help="Profile name: letters, digits, '-' or '_' (max 64)")
     clone.add_argument("audio", type=Path, help="Reference recording (WAV recommended)")
     clone.add_argument("--ref-text", default=None, help="Transcript of the reference recording")
+    clone.add_argument(
+        "--prepare",
+        action="store_true",
+        help=(
+            "Clean the recording first with ffmpeg, as `voice record` does (any format; "
+            "high-pass, silence trimmed, loudness, 24 kHz mono) and keep the clip"
+        ),
+    )
+    clone.add_argument(
+        "--start", type=float, default=None, help="With --prepare: start of the window, seconds"
+    )
+    clone.add_argument(
+        "--duration",
+        type=float,
+        default=None,
+        help="With --prepare: length of the window, seconds (3-10 s clone best)",
+    )
     clone.add_argument(
         "--overwrite", action="store_true", help="Replace an existing profile with that name"
     )
@@ -1014,6 +1031,7 @@ async def cmd_voice(settings: Settings, args: argparse.Namespace) -> int:
             print(f"  {name}: {instructions}")
     elif args.voice_command == "clone":
         profile_id = profile_id_from(args.name)
+        _check_prepare_args(args)
         consent = _confirm(
             f"Clone a voice from {args.audio}? Confirm the speaker has given permission.",
             args.yes,
@@ -1053,7 +1071,14 @@ async def cmd_voice(settings: Settings, args: argparse.Namespace) -> int:
             evicted = await library.delete(args.name)
             print(f"Cloned voice '{profile_id_from(args.name)}' deleted{_evicted(evicted)}.")
             return 0
-        if args.voice_command == "clone":
+        kept = ""
+        if args.voice_command == "clone" and args.prepare:
+            change, clip = await _clone_prepared(
+                settings, library, profile_id_from(args.name), args
+            )
+            verb = "created"
+            kept = f" Clip kept at {clip}."
+        elif args.voice_command == "clone":
             change = await library.clone(
                 args.name, args.audio, ref_text=args.ref_text, overwrite=args.overwrite
             )
@@ -1064,11 +1089,65 @@ async def cmd_voice(settings: Settings, args: argparse.Namespace) -> int:
         for warning in change.warnings:
             print(f"warning: {warning}", file=sys.stderr)
         voice_id = f"clone:{change.profile.profile_id}"
-        print(f"Cloned voice '{change.profile.profile_id}' {verb}{_evicted(change.evicted)}.")
+        print(f"Cloned voice '{change.profile.profile_id}' {verb}{_evicted(change.evicted)}.{kept}")
         print(f'Try it: voxello speak "Ciao, sono la tua nuova voce." --voice {voice_id}')
         return 0
     finally:
         await store.aclose()
+
+
+def _check_prepare_args(args: argparse.Namespace) -> None:
+    from voxello.errors import INVALID_REFERENCE_AUDIO
+
+    window = args.start is not None or args.duration is not None
+    if window and not args.prepare:
+        raise VoxelloError(
+            INVALID_PARAMETER, "--start and --duration cut the recording: add --prepare."
+        )
+    if args.start is not None and args.start < 0:
+        raise VoxelloError(INVALID_PARAMETER, "--start must be 0 or more seconds.")
+    if args.duration is not None and args.duration <= 0:
+        raise VoxelloError(INVALID_PARAMETER, "--duration must be more than 0 seconds.")
+    if args.prepare and not args.audio.is_file():
+        raise VoxelloError(INVALID_REFERENCE_AUDIO, f"Reference audio {args.audio} is not a file.")
+
+
+async def _clone_prepared(
+    settings: Settings, library: VoiceLibrary, profile_id: str, args: argparse.Namespace
+) -> tuple[VoiceChange, Path]:
+    """``voice clone --prepare``: clean (a window of) the recording, clone the clip, keep it
+    in the recordings directory with a sidecar, as ``voice record`` does."""
+    from voxello.recording import ffmpeg
+    from voxello.storage.wav import wav_duration_ms
+
+    cleaner = ffmpeg.detect_cleaner()
+    directory = settings.storage.resolved_recordings_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    pending = directory / f"{profile_id}.pending.wav"
+    try:
+        await asyncio.to_thread(
+            cleaner.prepare, args.audio, pending, start=args.start, duration=args.duration
+        )
+        change = await library.clone(
+            profile_id, pending, ref_text=args.ref_text, overwrite=args.overwrite
+        )
+        clip = directory / f"{profile_id}.wav"
+        os.replace(pending, clip)
+    finally:
+        pending.unlink(missing_ok=True)
+    duration_ms = wav_duration_ms(clip)
+    meta = {
+        "profile": profile_id,
+        "source": str(args.audio),
+        "start": args.start,
+        "duration": args.duration,
+        "ref_text": args.ref_text,
+        "seconds": duration_ms / 1000 if duration_ms is not None else None,
+        "prepared_at": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+    sidecar = directory / f"{profile_id}.json"
+    sidecar.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return change, clip
 
 
 def _evicted(count: int) -> str:

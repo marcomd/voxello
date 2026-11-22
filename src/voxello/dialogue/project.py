@@ -24,6 +24,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from voxello.dialogue import qa
 from voxello.dialogue.cast import Cast, resolve_line_voice
 from voxello.dialogue.script import (
     AnnotationResult,
@@ -37,7 +38,7 @@ from voxello.dialogue.script import (
     speaker_of,
 )
 from voxello.dialogue.segment import DEFAULT_MAX_CHARS
-from voxello.dialogue.takes import LineRequest, LineState, State, Take, fingerprint
+from voxello.dialogue.takes import LineRequest, LineState, Signal, State, Take, fingerprint
 from voxello.errors import INVALID_SCRIPT, STORAGE_ERROR, VoxelloError
 
 TAKE_NAME_CHARS = 16
@@ -160,11 +161,13 @@ class Project:
         """Write the audio and record the take in ``state`` (not saved: the caller does)."""
         take_fp = fingerprint(request)
         write_atomic(self.take_path(segment_id, take_fp), audio)
+        measures = qa.measure(audio)
         take = Take(
             fingerprint=take_fp,
             seed=request.seed,
             duration_ms=wav_duration_ms(audio),
             created=datetime.now(UTC).isoformat(timespec="seconds"),
+            qa=Signal.from_measures(measures) if measures is not None else None,
         )
         line = state.lines.setdefault(segment_id, LineState())
         line.takes = [t for t in line.takes if t.fingerprint != take_fp] + [take]
@@ -173,6 +176,16 @@ class Project:
     def has_audio(self, segment_id: str, take: Take) -> bool:
         return self.take_path(segment_id, take.fingerprint).is_file()
 
+    def ensure_measures(self, segment_id: str, take: Take) -> bool:
+        """Measure a take stored without (or with outdated) measures; True if ``take`` changed."""
+        if take.qa is not None and take.qa.current:
+            return False
+        measures = qa.measure(self.take_path(segment_id, take.fingerprint))
+        if measures is None:
+            return False
+        take.qa = Signal.from_measures(measures)
+        return True
+
     # --- script operations ----------------------------------------------------------------
 
     def annotate(self, data: object) -> AnnotationResult:
@@ -180,6 +193,27 @@ class Project:
         if result.changed:
             self.save_script(result.script)
         return result
+
+    def edit_line(
+        self, segment_id: str, fields: dict[str, object], designs: dict[str, str] | None = None
+    ) -> list[str]:
+        """Annotate one line from review; nothing is saved when the change breaks that line.
+
+        Returns the problems (empty when saved): an invalid value, or a ``check`` error on the
+        line, such as a tag outside the allowed list, which would otherwise block every
+        command that needs a valid project.
+        """
+        try:
+            result = apply_annotations(self.load_script(), {segment_id: fields})
+        except VoxelloError as exc:
+            return [str(p) for p in exc.details.get("problems", [exc.message])]
+        report = check(result.script, self.load_source(), self.load_cast(), designs or {})
+        problems = [str(issue) for issue in report.errors if issue.segment_id == segment_id]
+        if problems:
+            return problems
+        if result.changed:
+            self.save_script(result.script)
+        return []
 
     def check(self, designs: dict[str, str] | None = None) -> CheckReport:
         return check(self.load_script(), self.load_source(), self.load_cast(), designs or {})

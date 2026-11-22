@@ -1,22 +1,33 @@
-"""``voxello dialogue ...``: the terminal side of dialogue production (roadmap 8.3-8.4).
+"""``voxello dialogue ...``: the terminal side of dialogue production (roadmap 8.3-8.5).
 
-The commands are thin: files and rules live in ``project``/``script``/``render``. Output for
-the agent (``segments``) is one segment per line, ids first, so it can be read in chunks.
+The commands are thin: files and rules live in ``project``/``script``/``render``, review in
+``review``/``review_session``. Output for the agent (``segments``) is one segment per line,
+ids first, so it can be read in chunks. ``review`` reads single keys from the terminal (cbreak
+mode on POSIX, so Ctrl-C still interrupts; ``msvcrt`` on Windows).
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib
+import os
+import select
+import shlex
+import subprocess
 import sys
+import tempfile
 from collections import Counter
+from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol
 
 import yaml
 
 from voxello.dialogue.project import LineDefaults, Project
 from voxello.dialogue.render import RenderEvent, render
+from voxello.dialogue.review import normalize_key
+from voxello.dialogue.review_session import ReviewSession, ReviewSummary
 from voxello.dialogue.script import (
     ScriptSegment,
     effective_tts_text,
@@ -25,14 +36,18 @@ from voxello.dialogue.script import (
     speaker_of,
 )
 from voxello.dialogue.segment import DEFAULT_MAX_CHARS, default_tts_text, segment_text
-from voxello.errors import INVALID_SCRIPT, VoxelloError
+from voxello.errors import INVALID_PARAMETER, INVALID_SCRIPT, VoxelloError
 
 if TYPE_CHECKING:
     from voxello.config import Settings, VoiceStudioSettings
     from voxello.dialogue.cast import Cast
+    from voxello.dialogue.review_session import ReviewTerminal
+    from voxello.playback.base import AudioPlayer
     from voxello.tts.base import TTSProvider
 
 LABEL_WIDTH = 20
+KEY_POLL_SECONDS = 0.03
+WINDOWS_ARROWS = {"H": "\x1b[A", "P": "\x1b[B", "M": "\x1b[C", "K": "\x1b[D"}
 
 
 def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -83,6 +98,23 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
         "--force", action="store_true", help="Synthesize again even when a take is current"
     )
 
+    review = dsub.add_parser(
+        "review",
+        parents=[project],
+        help="Listen to every line: approve, regenerate, edit (single keys)",
+        description=(
+            "Plays each line's take. Enter approve and next, r new take, 1-9 pick a take, "
+            "p replay, c play in context, e edit tts_text in $EDITOR, g register, +/- speed, "
+            "n/b next/back, q quit. Every action is saved at once; review resumes where it "
+            "stopped."
+        ),
+    )
+    review.add_argument("--from", dest="start", help="Start at this segment id")
+    review.add_argument("--pending", action="store_true", help="Only lines not approved yet")
+    review.add_argument(
+        "--flagged", action="store_true", help="Lines with QA flags first, then the others"
+    )
+
 
 def _add_window(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--from", dest="start", help="First segment id")
@@ -104,6 +136,12 @@ def run(settings: Settings, args: argparse.Namespace) -> int:
         return cmd_show(project, args)
     if command == "stats":
         return cmd_stats(project)
+    if command == "review":
+        try:
+            return asyncio.run(cmd_review(project, settings, args))
+        except KeyboardInterrupt:
+            print(f"\n{_saved_at(project.load_state().review.position)}")
+            return 130
     return asyncio.run(cmd_render(project, settings, args))
 
 
@@ -239,14 +277,19 @@ def cmd_stats(project: Project) -> int:
     return 0
 
 
-async def cmd_render(project: Project, settings: Settings, args: argparse.Namespace) -> int:
+def _defaults(settings: Settings) -> LineDefaults:
     vs = settings.tts.voicestudio
-    defaults = LineDefaults(
+    return LineDefaults(
         designs=settings.speech.voice_designs,
         speed=vs.speed,
         num_step=vs.num_step,
         guidance_scale=vs.guidance_scale,
     )
+
+
+async def cmd_render(project: Project, settings: Settings, args: argparse.Namespace) -> int:
+    vs = settings.tts.voicestudio
+    defaults = _defaults(settings)
 
     def progress(event: RenderEvent) -> None:
         what = "current" if event.reused else "rendered"
@@ -267,6 +310,154 @@ async def cmd_render(project: Project, settings: Settings, args: argparse.Namesp
         await provider.aclose()
     print(f"Rendered {summary.rendered} lines, {summary.reused} already current.")
     return 0
+
+
+async def cmd_review(project: Project, settings: Settings, args: argparse.Namespace) -> int:
+    if not stdin_is_tty():
+        raise VoxelloError(
+            INVALID_PARAMETER,
+            "`voxello dialogue review` needs an interactive terminal: run it in your own shell.",
+        )
+    provider = make_provider(settings.tts.voicestudio)
+    try:
+        with (
+            tempfile.TemporaryDirectory(prefix="voxello-review-") as work,
+            make_review_terminal(Path(work)) as terminal,
+        ):
+            session = ReviewSession(
+                project,
+                provider,
+                make_player(settings),
+                terminal,
+                workdir=Path(work),
+                defaults=_defaults(settings),
+            )
+            summary = await session.run(
+                start=args.start, pending=args.pending, flagged=args.flagged
+            )
+    finally:
+        await provider.aclose()
+    print(_review_summary(project, summary))
+    return 130 if summary.interrupted else 0
+
+
+def _review_summary(project: Project, summary: ReviewSummary) -> str:
+    counts = f"approved {summary.approved}/{summary.total} lines, {summary.flagged} flagged"
+    if summary.position is None:
+        return f"Review finished: {counts}."
+    resume = f"Resume with: voxello dialogue review -p {shlex.quote(str(project.root))}"
+    if summary.interrupted:
+        return f"{_saved_at(summary.position)}: {counts}. {resume}"
+    return f"{counts[0].upper()}{counts[1:]}. {resume}"
+
+
+def _saved_at(position: str | None) -> str:
+    return f"Review saved at {position}" if position else "Review saved"
+
+
+def stdin_is_tty() -> bool:
+    return sys.stdin.isatty()
+
+
+def make_player(settings: Settings) -> AudioPlayer | None:
+    from voxello.playback.detect import detect_backend
+    from voxello.playback.subprocess_player import SubprocessPlayer
+
+    backend = detect_backend(settings.playback.backend)
+    return SubprocessPlayer(backend, settings.playback.volume) if backend else None
+
+
+class _ReviewConsole(Protocol):
+    def __enter__(self) -> ReviewTerminal: ...
+
+    def __exit__(self, *exc: object) -> None: ...
+
+
+def make_review_terminal(workdir: Path) -> _ReviewConsole:
+    fd = None if sys.platform == "win32" else sys.stdin.fileno()
+    return ConsoleReviewTerminal(workdir, fd=fd)
+
+
+def editor_command(env: Mapping[str, str], platform: str) -> list[str]:
+    editor = env.get("VISUAL") or env.get("EDITOR")
+    if editor:
+        return shlex.split(editor)
+    return ["notepad"] if platform == "win32" else ["vi"]
+
+
+async def windows_key(msvcrt: Any, *, interval: float = KEY_POLL_SECONDS) -> str:
+    """One key from ``msvcrt`` (polled, so the wait can be cancelled); arrows as on POSIX."""
+    while not msvcrt.kbhit():  # noqa: ASYNC110 - msvcrt has no readiness callback to await
+        await asyncio.sleep(interval)
+    raw = msvcrt.getwch()
+    if raw in ("\x00", "\xe0"):
+        raw = WINDOWS_ARROWS.get(msvcrt.getwch(), "")
+    return normalize_key(raw)
+
+
+class ConsoleReviewTerminal:
+    """Single keys without Enter: cbreak mode on ``fd`` while the review runs (signals stay
+    on, so Ctrl-C interrupts even during a render), normal mode for the editor."""
+
+    def __init__(self, workdir: Path, *, fd: int | None) -> None:
+        self.workdir = workdir
+        self.fd = fd
+        self._saved: Any = None
+
+    def __enter__(self) -> ConsoleReviewTerminal:
+        self._cbreak()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._restore()
+
+    def _cbreak(self) -> None:
+        if self.fd is None:
+            return
+        import termios
+        import tty
+
+        self._saved = termios.tcgetattr(self.fd)
+        tty.setcbreak(self.fd)
+
+    def _restore(self) -> None:
+        if self.fd is None or self._saved is None:
+            return
+        import termios
+
+        termios.tcsetattr(self.fd, termios.TCSADRAIN, self._saved)
+        self._saved = None
+
+    def say(self, text: str) -> None:
+        print(text, flush=True)
+
+    async def key(self) -> str:
+        if self.fd is None:
+            return await windows_key(importlib.import_module("msvcrt"))
+        # Polled: loop.add_reader would be the Event-style wait, but kqueue (macOS) rejects ttys.
+        while not select.select([self.fd], [], [], 0)[0]:  # noqa: ASYNC110
+            await asyncio.sleep(KEY_POLL_SECONDS)
+        return normalize_key(os.read(self.fd, 32).decode(errors="replace"))
+
+    def edit(self, text: str) -> str | None:
+        path = self.workdir / "tts_text.txt"
+        path.write_text(text + "\n", encoding="utf-8")
+        restore = self._saved is not None
+        self._restore()
+        try:
+            result = subprocess.run(  # the user's own editor on a file we chose
+                [*editor_command(os.environ, sys.platform), str(path)], check=False
+            )
+        except OSError as exc:
+            self.say(f"error: could not start the editor: {exc}")
+            return None
+        finally:
+            if restore:
+                self._cbreak()
+        if result.returncode != 0:
+            self.say(f"The editor exited with status {result.returncode}; nothing changed.")
+            return None
+        return path.read_text(encoding="utf-8")
 
 
 def make_provider(settings: VoiceStudioSettings) -> TTSProvider:

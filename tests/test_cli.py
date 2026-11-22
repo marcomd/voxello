@@ -675,6 +675,89 @@ def test_voice_clone_warns_about_duration_and_reports_errors(
     assert "Nothing to update" in capsys.readouterr().err
 
 
+# -- voice clone --prepare -----------------------------------------------------------------
+
+
+class FakeCleaner:
+    def __init__(self, duration_ms: int = 7000, fail: VoxelloError | None = None) -> None:
+        self.duration_ms = duration_ms
+        self.fail = fail
+        self.calls: list[tuple[Path, Path, float | None, float | None]] = []
+
+    def prepare(
+        self, raw: Path, output: Path, *, start: float | None = None, duration: float | None = None
+    ) -> None:
+        self.calls.append((raw, output, start, duration))
+        if self.fail is not None:
+            raise self.fail
+        output.write_bytes(make_wav(self.duration_ms))
+
+
+@pytest.fixture
+def cleaner(isolated_env: Path, monkeypatch: pytest.MonkeyPatch) -> FakeCleaner:
+    import voxello.recording.ffmpeg as ffmpeg
+
+    fake = FakeCleaner()
+    monkeypatch.setattr(ffmpeg, "detect_cleaner", lambda **_kw: fake)
+    monkeypatch.setenv("VOXELLO_STORAGE__RECORDINGS_DIR", str(isolated_env / "voices"))
+    return fake
+
+
+def test_voice_clone_prepare_cleans_a_recording_and_keeps_the_clip(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, cleaner: FakeCleaner, capsys
+):
+    source = isolated_env / "lettura.m4a"
+    source.write_bytes(b"not really m4a")
+    args = ["voice", "clone", "narratore", str(source), "--prepare", "--start", "12.5"]
+    assert main([*args, "--duration", "8", "--ref-text", "C'era una volta", "-y"]) == 0
+    raw, _output, start, duration = cleaner.calls[0]
+    assert (raw, start, duration) == (source, 12.5, 8.0)
+    kept = isolated_env / "voices" / "narratore.wav"
+    assert kept.read_bytes() == make_wav(7000)
+    assert profile_store.profiles["narratore"][0] == make_wav(7000)
+    assert profile_store.profiles["narratore"][2] == "C'era una volta"
+    meta = json.loads((isolated_env / "voices" / "narratore.json").read_text())
+    assert meta["source"] == str(source)
+    assert meta["start"] == 12.5 and meta["duration"] == 8.0
+    assert meta["seconds"] == 7.0
+    assert not list((isolated_env / "voices").glob("*.pending.wav"))
+    out = capsys.readouterr().out
+    assert f"Clip kept at {kept}" in out
+
+
+def test_voice_clone_prepare_failures_leave_no_clip(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, cleaner: FakeCleaner, capsys
+):
+    from voxello.errors import RECORDING_FAILED
+
+    source = isolated_env / "lettura.wav"
+    source.write_bytes(make_wav(20000))
+    profile_store.fail_with = VoxelloError("tts_provider_unavailable", "server down")
+    assert main(["voice", "clone", "narratore", str(source), "--prepare", "-y"]) == 1
+    assert "server down" in capsys.readouterr().err
+    assert not list((isolated_env / "voices").iterdir())
+
+    profile_store.fail_with = None
+    cleaner.fail = VoxelloError(RECORDING_FAILED, "ffmpeg could not clean up the recording")
+    assert main(["voice", "clone", "narratore", str(source), "--prepare", "-y"]) == 1
+    assert "recording_failed" in capsys.readouterr().err
+    assert profile_store.profiles == {}
+
+
+def test_voice_clone_prepare_checks_its_arguments(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, cleaner: FakeCleaner, capsys
+):
+    source = isolated_env / "lettura.wav"
+    source.write_bytes(make_wav(20000))
+    assert main(["voice", "clone", "narratore", str(source), "--start", "3", "-y"]) == 1
+    assert "--prepare" in capsys.readouterr().err
+    assert main(["voice", "clone", "x", str(isolated_env / "missing.wav"), "--prepare", "-y"]) == 1
+    assert "invalid_reference_audio" in capsys.readouterr().err
+    assert main(["voice", "clone", "x", str(source), "--prepare", "--duration", "0", "-y"]) == 1
+    assert "invalid_parameter" in capsys.readouterr().err
+    assert cleaner.calls == []
+
+
 # -- voice record (roadmap 8.2) --------------------------------------------------------------
 
 

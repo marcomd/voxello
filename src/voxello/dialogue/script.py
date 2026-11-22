@@ -207,6 +207,22 @@ def is_spoken(seg: ScriptSegment, cast: Cast) -> bool:
     return not (seg.attribution and cast.attributions == "drop")
 
 
+def pause_between(script: Script, cast: Cast, first_id: str, second_id: str) -> int:
+    """The silence in ms between two lines spoken one after the other (``cast.pauses_ms``):
+    a break between them, else a new paragraph, else a change of speaker, else the same one."""
+    ids = [seg.id for seg in script.segments]
+    start, end = sorted((ids.index(first_id), ids.index(second_id)))
+    pauses = cast.pauses_ms
+    if any(seg.kind == "break" for seg in script.segments[start + 1 : end]):
+        return pauses.break_
+    first, second = script.segment(first_id), script.segment(second_id)
+    if first.id.split(".")[0] != second.id.split(".")[0]:
+        return pauses.paragraph
+    if speaker_of(first, cast) != speaker_of(second, cast):
+        return pauses.speaker_change
+    return pauses.same_speaker
+
+
 # --- check ----------------------------------------------------------------------------------
 
 

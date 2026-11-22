@@ -159,6 +159,20 @@ voxello voice record francesca -r tired --text "Una frase da leggere con quel to
 The last line creates a register of your own (`clone:francesca-tired`); a register that is not
 built in needs the sentence to read with `--text`.
 
+## Clone a recording you already have
+
+A voice recorded elsewhere (a phone memo, a longer reading) does not need `voice record`:
+`--prepare` applies the same cleanup (high-pass, silence trimmed, loudness, 24 kHz mono) and
+`--start`/`--duration` pick the 3-10 s to clone. Pass the words spoken in that window:
+
+```bash
+voxello voice clone narratore ~/lettura.m4a --prepare --start 12.5 --duration 8 \
+  --ref-text "Le parole dette in quegli otto secondi."
+```
+
+The clean clip and a `narratore.json` sidecar (source file, window, transcript) stay in the
+recordings directory, like the clips `voice record` keeps.
+
 ## Use the voices
 
 Pass a voice wherever Voxello accepts one:
