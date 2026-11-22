@@ -266,6 +266,162 @@ rollout format is not a stable interface, so the "already spoke" check for Codex
 and fails open; the Codex paths were verified against the documentation and a local
 `codex-cli 0.169`, not in a live Codex session.
 
+## Milestone 8 — Multi-character dialogue (in progress)
+
+Goal: turn a text (a page, a chapter) into an audio dialogue with a narrator and one voice per
+character, every line reviewed by ear and regenerable alone or in the context of the scene.
+Personal use. Design and spike results in `docs/decisions/0003-dialogue-production.md`.
+
+Workflow the user sees, driven by the `dialogue` skill:
+
+```
+voxello dialogue init chapter1.txt          # project dir, deterministic segments
+  (agent annotates segments in chunks)      # voxello dialogue annotate FILE, dialogue check
+  (agent interviews the user on the cast)   # writes cast.yaml; offers voxello voice record
+voxello voice record marco --register whisper   # guided recording + consent + clone
+voxello dialogue render                     # one take per line, resumable
+voxello dialogue review                     # terminal loop: approve, regenerate, edit
+voxello dialogue play --from 12             # whole scene, shows the line being played
+voxello dialogue export --srt               # final.wav, timeline.json, final.srt
+```
+
+A dialogue project is a directory:
+
+```
+chapter1/
+  source.txt     # copy of the input, never modified
+  cast.yaml      # written by the agent with the user: characters, voices, registers, pauses
+  script.yaml    # segments: id, kind, text, speaker, register, tts_text, tags, speed, attribution
+  state.json     # machine-owned: takes per line and the approved fingerprint
+  takes/<id>/<fingerprint>.wav
+  render/        # final.wav, timeline.json, final.srt
+```
+
+```yaml
+# cast.yaml
+language: it
+narrator: narratore
+attributions: keep          # keep | drop narration segments flagged as "disse Marco"
+generation: {num_step: 16, seed: 1}
+pauses_ms: {same_speaker: 250, speaker_change: 450, paragraph: 700}
+characters:
+  narratore: {voice: clone:narratore}
+  marco:
+    voice: clone:marco                       # main voice, also the fallback for registers
+    registers: {whisper: clone:marco-whisper, sad: clone:marco-sad}
+  francesca: {voice: clone:francesca}        # registers can be recorded later
+```
+
+### 8.1 Per-request generation options — done
+
+`tts/base.py`: a `SynthesisOptions` dataclass (`seed`, `speed`, `num_step`, all optional) and an
+`options` keyword on `TTSProvider.synthesize`; `tts/voicestudio.py` `_payload` lets them
+override the configured values. `FakeProvider` records them.
+
+Acceptance: `speak`/`notify` payloads and cache keys are unchanged; the options reach the
+request body only when set. Tests: `tests/test_voicestudio.py` payload cases with
+`httpx2.MockTransport`; a regression test that a service call sends no `seed`.
+
+### 8.2 Guided recording: `voxello voice record` — done
+
+`voxello voice record NAME [--register R] [--language it] [--text T] [--device D] [--no-keep]`.
+New `recording/` package: a `Recorder` protocol, an ffmpeg backend (avfoundation on macOS,
+`pulse`/`alsa` on Linux; Windows raises `recorder_unavailable`), and `prepare_reference()`
+(high-pass, trim leading and trailing silence, loudness normalization, 24 kHz mono 16-bit).
+Reading texts and tone hints per register and language in
+`src/voxello/assets/dialogue/registers/{it,en}.yaml` (registers `neutral`, `whisper`, `sad`,
+`angry`, `happy`; custom registers need `--text`). The flow: show tone hint and text, countdown,
+record until Enter (bounded at 15 s), clean, check 3-10 s, play back, accept / redo / quit,
+then the existing consent prompt and `VoiceLibrary.clone()` of `NAME` (register `neutral`) or
+`NAME-REGISTER` with the read text as `ref_text`. `--all` records every built-in register in one session (one
+consent, skip per register, only the missing ones on request, summary at the end); the
+step-by-step guide is `docs/recording-voices.md`. The cleaned clip is kept under
+`user_data_dir/voices/` unless `--no-keep`, for re-cloning on another server. `doctor` reports
+the recorder backend.
+
+Acceptance: the command refuses without a TTY; nothing is uploaded without consent; a failed
+upload keeps the clip and says how to retry with `voxello voice clone`. New error codes
+`recorder_unavailable`, `recording_failed`. Tests: ffmpeg argument lists per OS, the prompt
+loop with scripted input and a fake recorder, duration warnings, profile naming; an opt-in
+integration test that records nothing but runs `prepare_reference` on a fixture through the
+real ffmpeg.
+
+### 8.3 Segmentation and annotation
+
+`dialogue/segment.py` (pure): paragraphs split on blank lines; quoted speech in `«»`, `“”`,
+`""` and dash dialogue (`—`/`–` at paragraph start, closing dash before an attribution);
+narration split at sentence boundaries into segments of at most about 300 characters. Ids are
+stable (`p003.2`). `dialogue/script.py`: the `script.yaml` and `cast.yaml` models (Pydantic),
+annotation merge, and `check`: the segments rebuild the source modulo whitespace, every quote
+has a speaker in the cast, registers and voices resolve, tags are in the allowed list and at
+the start of `tts_text` (warning otherwise), `tts_text` is not empty. Commands: `dialogue init`,
+`dialogue segments [--from ID] [--count N]` (prints a chunk for the agent), `dialogue annotate
+FILE` (partial updates by id, rejects unknown ids and any change to `text`), `dialogue check`,
+`dialogue show` (screenplay-like view), `dialogue stats` (lines and characters per speaker,
+for the cast interview). New error code `invalid_script`.
+
+Acceptance: the three texts in `tmp/` segment as a person would read them, including
+`«...», disse lei, «...»` and a question followed by an attribution. Tests: table-driven
+segmenter cases per quote style, the rebuild invariant as a property over the fixtures, merge
+and validation errors with ids in the messages.
+
+### 8.4 Render and takes
+
+`dialogue/takes.py`: the fingerprint (SHA-256 of tts_text, resolved voice or instructions,
+language, speed, num_step, seed), the take store under `takes/` and `state.json` written
+atomically. `dialogue render [--lines A-B] [--force]` synthesizes every line without a take
+for its current fingerprint, sequentially, with progress on stderr; an interrupted render
+resumes. Voice resolution: line register → `characters.X.registers` → `characters.X.voice`;
+design names and `instructions` go through `core/voice_design.normalize_instructions`, never
+together with a voice. `attributions: drop` skips flagged narration.
+
+Acceptance: a second render with no edits calls the provider zero times; editing one
+`tts_text` re-renders one line and clears its approval. Tests with `FakeProvider`, including
+cancellation mid-render leaving no partial WAV and a provider error reported with the line id.
+
+### 8.5 Review loop
+
+`dialogue review [--from ID] [--pending] [--flagged]` (`dialogue/review.py` holds the pure
+state machine, `cli.py` the terminal I/O): shows id, speaker, register, `text`, `tts_text`
+when different, take n/m and flags, then plays the take. Keys: Enter approve and next, `r`
+new take (next seed, older takes kept), `1`-`9` pick a take, `p` replay, `c` play in context
+(previous approved line, this take, next line with the configured pauses), `e` edit
+`tts_text` in `$EDITOR`, `+`/`-` speed by 0.05, `g` change register, `n`/`b` move, `q` quit.
+Flags (`dialogue/qa.py`, standard library only): duration outside the speaker's usual
+characters per second, clipping, leading or trailing silence above a threshold, near-silent
+take. Flagged lines can be reviewed first.
+
+Acceptance: every action persists before the next prompt; quitting and restarting resumes
+where review stopped. Tests: the state machine with scripted keys, `FakePlayer`, QA functions
+on synthetic PCM.
+
+### 8.6 Play-through and export
+
+`dialogue play [--from ID]` plays approved takes (or the latest take, marked) line by line with
+the configured pauses, printing the current id; Ctrl-C stops and offers to open review at that
+line. `dialogue export [-o PATH] [--srt] [--allow-unapproved]` concatenates with silences,
+evens loudness per line (RMS gain with a peak ceiling), checks a single sample format, and
+writes `final.wav`, `timeline.json` (id, speaker, start, end) and optionally `final.srt`.
+
+Acceptance: export refuses unapproved or stale lines unless asked; the timeline matches the
+WAV sample count. Tests: pause and gain arithmetic, concatenation of fixtures of mixed
+lengths, SRT formatting, refusal paths.
+
+### 8.7 Skill, install and documentation
+
+`src/voxello/assets/claude/skills/dialogue/SKILL.md`, installed by `voxello install claude`
+and `voxello install codex` next to `voice-notify` (mirror under `.claude/skills/` checked by
+`tests/test_install.py`). The skill runs `init`, annotates in chunks of about 80 segments
+(speaker, register from the cast, allowed tags only at line start, punctuation in `tts_text`
+for registers that transfer weakly such as angry or happy, attribution flags), runs `stats`,
+interviews the user on the cast (number of characters, the narrator, for each: an existing
+clone, a guided recording now — the user runs `voxello voice record` in their own terminal —,
+a design as a last resort with the warning that design is unstable outside Chinese and
+English), writes `cast.yaml`, runs `check` and `render`, and hands over to `review`, `play`
+and `export`. README section, TUTORIAL chapter, CLAUDE.md architecture lines, CHANGELOG.
+Licensing note: personal use; OmniVoice weights are CC-BY-NC and voices are cloned only with
+the speaker's consent.
+
 ## Recommended order
 
 | Step | Item | Reason |
@@ -278,7 +434,10 @@ and fails open; the Codex paths were verified against the documentation and a lo
 | 6 | Milestone 4 | Done: retry, `doctor --synth`, Windows CI leg and checklist, gated release |
 | 7 | Milestone 6 | Done: cloned voices on the server, voice design by attributes or by name |
 | 7b | Milestone 7 | Done: notification modes and a voice per kind of message, Codex hook |
-| 8 | Milestone 5 | On demand |
+| 8 | 8.1, 8.2 | Per-request seed/speed; guided recording, useful on its own for better clones |
+| 9 | 8.3, 8.4 | Segments, annotation and reproducible takes: a dialogue renders end to end |
+| 10 | 8.5, 8.6, 8.7 | Review, export and the skill that drives it |
+| 11 | Milestone 5 | On demand |
 
 Items 3.1 and 2.x were done before the first PyPI release (1.1) because they change the MCP
 tool signatures and the configuration layout: better to do that before external installations

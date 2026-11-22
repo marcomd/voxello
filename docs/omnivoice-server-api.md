@@ -101,7 +101,7 @@ different, or set it once in the config.
 
 | Endpoint | Used for | Notes |
 |---|---|---|
-| `POST /v1/audio/speech` | synthesis | JSON `SpeechRequest`; only `input` is required. `response_format` defaults to `wav` here (VoiceStudio defaults to `mp3`), Voxello always sends `wav`. Extra fields available: `speaker`, `instructions`, `stream`, `denoise`, `t_shift`, `position_temperature`, `class_temperature`, `duration`, `seed`, `request_timeout_s`. |
+| `POST /v1/audio/speech` | synthesis | JSON `SpeechRequest`; only `input` is required. `response_format` defaults to `wav` here (VoiceStudio defaults to `mp3`), Voxello always sends `wav`. Extra fields available: `speaker`, `instructions`, `stream`, `denoise`, `t_shift`, `position_temperature`, `class_temperature`, `duration`, `seed`, `request_timeout_s`. `seed` (0 to 2^32-1), `speed` and `num_step` can be set per request through `SynthesisOptions` (roadmap 8.1); the same seed, text, voice and values give byte-identical audio. |
 | `GET /health` | `get_status`, `doctor` | `{"status":"healthy","ready":true,"model_loaded":true,"uptime_s":…,"model_id":"k2-fsa/OmniVoice","memory_rss_mb":…}`. Voxello treats `ready`/`model_loaded` false as unhealthy. |
 | `GET /v1/voices` | `doctor` voice list, `voice list`, design vocabulary | `{"voices":[{"id","type","description"}],"design_attributes":{...},"total":N}`; `type` is `auto`, `design`, `preset`, `file` or `clone`, and clone entries add `profile_id`, `created_at`, `ref_text`. Tried after VoiceStudio's `/v1/audio/voices` returns 404. |
 | `GET /v1/models` | `doctor` engine list | OpenAI list shape, ids `omnivoice`, `tts-1`, `tts-1-hd`. Tried after `/engines/tts` returns 404. |

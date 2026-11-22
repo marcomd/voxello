@@ -26,4 +26,5 @@ config.yaml
 .env
 
 # Private engineering notes
+tmp/
 /docs/engineering-review.md

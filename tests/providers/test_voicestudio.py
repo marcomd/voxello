@@ -8,12 +8,14 @@ from pydantic import SecretStr
 
 from voxello.config import VoiceStudioSettings
 from voxello.errors import (
+    INVALID_PARAMETER,
     TTS_PROVIDER_ERROR,
     TTS_PROVIDER_UNAUTHORIZED,
     TTS_PROVIDER_UNAVAILABLE,
     VOICE_NOT_FOUND,
     VoxelloError,
 )
+from voxello.tts.base import SynthesisOptions
 from voxello.tts.voicestudio import VoiceStudioProvider
 
 from ..conftest import make_wav
@@ -87,6 +89,65 @@ async def test_voice_omitted_by_default_and_no_auth_header():
     provider, _ = make_provider(handler)
     result = await provider.synthesize("x")
     assert result.voice == "server-default"
+
+
+async def test_generation_options_override_the_configured_values():
+    """Milestone 8.1: a dialogue line carries its own seed, speed and num_step."""
+    seen: list[dict] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(json.loads(request.content))
+        return httpx2.Response(200, content=make_wav(10))
+
+    provider, _ = make_provider(handler, speed=1.0, num_step=32, guidance_scale=2.0)
+    await provider.synthesize(
+        "Ciao", "clone:marco", "it", options=SynthesisOptions(seed=7, speed=0.9, num_step=16)
+    )
+    assert seen[0]["seed"] == 7
+    assert seen[0]["speed"] == 0.9
+    assert seen[0]["num_step"] == 16
+    assert seen[0]["guidance_scale"] == 2.0, "an option left unset keeps the configured value"
+
+
+async def test_partial_options_send_only_what_is_set():
+    seen: list[dict] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(json.loads(request.content))
+        return httpx2.Response(200, content=make_wav(10))
+
+    provider, _ = make_provider(handler, num_step=32)
+    await provider.synthesize("Ciao", options=SynthesisOptions(seed=0))
+    await provider.synthesize("Ciao", options=SynthesisOptions())
+    assert seen[0]["seed"] == 0, "seed 0 is a valid seed, not 'unset'"
+    assert seen[0]["num_step"] == 32 and "speed" not in seen[0]
+    assert "seed" not in seen[1]
+
+
+async def test_no_options_sends_no_seed():
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        assert "seed" not in json.loads(request.content)
+        return httpx2.Response(200, content=make_wav(10))
+
+    provider, _ = make_provider(handler)
+    await provider.synthesize("x")
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"seed": -1},
+        {"seed": 2**32},
+        {"speed": 0.2},
+        {"speed": 4.5},
+        {"num_step": 0},
+        {"num_step": 65},
+    ],
+)
+def test_out_of_range_options_are_invalid_parameters(kwargs):
+    with pytest.raises(VoxelloError) as exc:
+        SynthesisOptions(**kwargs)
+    assert exc.value.code == INVALID_PARAMETER
 
 
 async def test_configured_voice_is_sent():

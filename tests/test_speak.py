@@ -24,6 +24,7 @@ async def test_speak_plays_and_reports_metadata(
     assert result.saved_path is None
     assert result.language == "it"
     assert provider.calls == [("Build completata.", None, "it")]
+    assert provider.options == [None], "speak keeps the configured generation values (8.1)"
 
     handle = await player.wait_started()
     assert handle.path.exists()

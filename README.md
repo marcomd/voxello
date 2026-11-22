@@ -134,6 +134,20 @@ owner agreed, and never treat a voice as proof of identity. Cloning is CLI-only;
 a cloned voice but cannot create one. Updating or deleting a voice through Voxello also drops the
 phrases cached with it; if you change profiles directly on the server, run `voxello cache clear`.
 
+**Guided recording.** `voxello voice record` records the clip for you and clones it: no
+recorder app, no transcript. Run it in your own terminal (macOS or Linux, needs `ffmpeg`):
+
+```bash
+voxello voice record francesca --all      # every register in one session
+voxello voice record francesca            # just the main (neutral) voice
+```
+
+OmniVoice copies the tone of the clip it was cloned from, so each way of speaking
+(**register**: `neutral`, `whisper`, `sad`, `angry`, `happy`) becomes a voice of its own,
+`clone:francesca`, `clone:francesca-whisper` and so on. The command shows the sentence to read
+and how to read it, records until you press Enter, cleans up and plays back the clip, and lets
+you accept, redo or skip each one. **Step by step: [docs/recording-voices.md](docs/recording-voices.md).**
+
 **Voice design** describes a voice instead of picking one, with at most one attribute per
 category: gender (`male`, `female`), age (`child`, `teenager`, `young adult`, `middle-aged`,
 `elderly`), pitch (`very low pitch` ... `very high pitch`), style (`whisper`) and, for English
@@ -535,6 +549,7 @@ artifacts and are not committed. For a focused test during development, pass its
 filter to `uv run pytest` without `--cov` so the whole-project coverage threshold does not apply.
 
 Docs: `docs/TUTORIAL.md` (setting up an omnivoice-server host on Windows/NVIDIA or Apple Silicon),
+`docs/recording-voices.md` (recording and cloning voices step by step),
 `docs/voxello-specification.md` (the specification), `docs/voicestudio-api.md` (VoiceStudio HTTP
 contract), `docs/omnivoice-server-api.md` (omnivoice-server flags and contract) and `docs/roadmap.md`
 (what comes next).

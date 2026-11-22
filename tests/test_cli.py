@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from pathlib import Path
 from typing import ClassVar
 
@@ -672,6 +673,289 @@ def test_voice_clone_warns_about_duration_and_reports_errors(
     assert "invalid_parameter" in capsys.readouterr().err
     assert main(["voice", "update", "marco"]) == 1
     assert "Nothing to update" in capsys.readouterr().err
+
+
+# -- voice record (roadmap 8.2) --------------------------------------------------------------
+
+
+@pytest.fixture
+def recorder(isolated_env: Path, monkeypatch: pytest.MonkeyPatch):
+    """A fake microphone, no countdown, no player and an interactive terminal."""
+    import voxello.cli as cli
+    import voxello.recording.ffmpeg as ffmpeg
+
+    from .test_recording import FakeRecorder
+
+    fake = FakeRecorder(6000)
+    monkeypatch.setattr(ffmpeg, "detect_recorder", lambda **_kw: fake)
+    monkeypatch.setattr("voxello.recording.session.time.sleep", lambda _s: None)
+    played: list[Path] = []
+    monkeypatch.setattr(cli, "_blocking_player", lambda _settings: played.append)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setenv("VOXELLO_STORAGE__RECORDINGS_DIR", str(isolated_env / "voices"))
+    fake.played = played  # type: ignore[attr-defined]
+    return fake
+
+
+def answer(monkeypatch: pytest.MonkeyPatch, *answers: str) -> list[str]:
+    """Feed ``input()``; returns the prompts it was called with."""
+    queue, prompts = list(answers), []
+
+    def fake_input(prompt: str = "") -> str:
+        prompts.append(prompt)
+        return queue.pop(0)
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    return prompts
+
+
+def test_voice_record_clones_the_register_with_the_read_text(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, recorder, monkeypatch, capsys
+):
+    from voxello.recording.registers import reading_script
+
+    prompts = answer(monkeypatch, "y", "", "", "a")
+    assert main(["voice", "record", "marco", "--register", "whisper"]) == 0
+    expected = reading_script("whisper", "it").text
+    audio, filename, ref_text = profile_store.profiles["marco-whisper"]
+    assert ref_text == expected and filename == "marco-whisper.wav"
+    assert "permission" in prompts[0]
+    clip = isolated_env / "voices" / "marco-whisper.wav"
+    assert clip.read_bytes() == audio, "the cleaned clip is kept for re-cloning"
+    meta = json.loads((isolated_env / "voices" / "marco-whisper.json").read_text())
+    assert meta["ref_text"] == expected and meta["register"] == "whisper"
+    assert meta["language"] == "it" and meta["seconds"] == 6.0
+    out = capsys.readouterr().out
+    assert expected in out
+    assert "--voice clone:marco-whisper" in out
+    assert len(recorder.played) == 1, "the take is played back once before accepting"
+
+
+def test_voice_record_neutral_uses_the_bare_name_and_no_keep_removes_the_clip(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, recorder, monkeypatch, capsys
+):
+    recorder.durations = [2000]
+    answer(monkeypatch, "", "", "a")
+    args = ["voice", "record", "clone:marco", "-y", "--no-keep", "-l", "en", "--text", "Hi."]
+    assert main(args) == 0
+    assert profile_store.profiles["marco"][2] == "Hi."
+    assert "warning: The reference audio lasts 2.0 s" in capsys.readouterr().err
+    assert list((isolated_env / "voices").iterdir()) == []
+
+
+def test_voice_record_needs_a_terminal_and_consent(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, recorder, monkeypatch, capsys
+):
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    assert main(["voice", "record", "marco", "-y"]) == 1
+    assert "recorder_unavailable" in capsys.readouterr().err
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    answer(monkeypatch, "n")
+    assert main(["voice", "record", "marco"]) == 1
+    assert "permission" in capsys.readouterr().err
+    assert recorder.started == 0 and profile_store.profiles == {}
+
+
+def test_voice_record_asks_before_replacing_a_profile(
+    isolated_env: Path,
+    profile_store: FakeVoiceProfileStore,
+    reference: Path,
+    recorder,
+    monkeypatch,
+    capsys,
+):
+    assert main(["voice", "clone", "marco", str(reference), "--ref-text", "old", "-y"]) == 0
+    answer(monkeypatch, "n")
+    assert main(["voice", "record", "marco", "-y"]) == 1
+    assert recorder.started == 0
+    assert profile_store.profiles["marco"][2] == "old"
+    answer(monkeypatch, "", "", "a")
+    assert main(["voice", "record", "marco", "-y", "--overwrite"]) == 0
+    assert profile_store.profiles["marco"][2] != "old"
+    profile_store.profiles["marco"] = (b"", "x.wav", "old")
+    answer(monkeypatch, "y", "", "", "a")
+    assert main(["voice", "record", "marco", "-y"]) == 0, "answering yes replaces it too"
+    assert profile_store.profiles["marco"][2] != "old"
+
+
+def test_voice_record_quit_records_nothing(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, recorder, monkeypatch, capsys
+):
+    answer(monkeypatch, "q")
+    assert main(["voice", "record", "marco", "-y"]) == 1
+    assert "Nothing recorded" in capsys.readouterr().err
+    assert profile_store.profiles == {}
+
+
+def test_voice_record_keeps_the_clip_when_the_upload_fails(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, recorder, monkeypatch, capsys
+):
+    from voxello.errors import TTS_PROVIDER_UNAVAILABLE
+
+    answer(monkeypatch, "", "", "a")
+    original_create = profile_store.create_voice_profile
+
+    async def failing_create(*args, **kwargs):
+        raise VoxelloError(TTS_PROVIDER_UNAVAILABLE, "down")
+
+    monkeypatch.setattr(profile_store, "create_voice_profile", failing_create)
+    assert main(["voice", "record", "marco", "-r", "sad", "-y", "--no-keep"]) == 1
+    err = capsys.readouterr().err
+    clip = isolated_env / "voices" / "marco-sad.wav"
+    assert clip.exists(), "a failed upload never loses the recording"
+    assert "tts_provider_unavailable" in err
+    assert f"voxello voice clone marco-sad {shlex.quote(str(clip))} --ref-text" in err
+    monkeypatch.setattr(profile_store, "create_voice_profile", original_create)
+
+
+def test_voice_record_reports_a_missing_recorder(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, monkeypatch, capsys
+):
+    import voxello.recording.ffmpeg as ffmpeg
+    from voxello.errors import RECORDER_UNAVAILABLE
+
+    def unavailable(**_kw):
+        raise VoxelloError(RECORDER_UNAVAILABLE, "install ffmpeg")
+
+    monkeypatch.setattr(ffmpeg, "detect_recorder", unavailable)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    assert main(["voice", "record", "marco", "-y"]) == 1
+    assert "install ffmpeg" in capsys.readouterr().err
+
+
+ALL_REGISTERS = ["neutral", "whisper", "sad", "angry", "happy"]
+TAKE = ("", "", "a")  # Enter to record, Enter to stop, accept
+
+
+def test_voice_record_all_clones_every_register_with_one_consent(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, recorder, monkeypatch, capsys
+):
+    from voxello.recording.registers import available_registers
+
+    prompts = answer(monkeypatch, "y", *TAKE * 5)
+    assert main(["voice", "record", "francesca", "--all"]) == 0
+    scripts = available_registers("it")
+    expected = {
+        "francesca": scripts["neutral"].text,
+        **{f"francesca-{r}": scripts[r].text for r in ALL_REGISTERS[1:]},
+    }
+    assert {pid: text for pid, (_, _, text) in profile_store.profiles.items()} == expected
+    assert sum("permission" in prompt for prompt in prompts) == 1, "one consent for the session"
+    out = capsys.readouterr().out
+    assert "[1/5] neutral" in out and "[5/5] happy" in out
+    for register in ALL_REGISTERS[1:]:
+        assert re.search(rf"{register}\s+clone:francesca-{register}\s+created", out)
+
+
+def test_voice_record_all_records_only_the_missing_registers_when_asked(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, recorder, monkeypatch, capsys
+):
+    profile_store.profiles["francesca"] = (b"", "old.wav", "old")
+    profile_store.profiles["francesca-sad"] = (b"", "old.wav", "old")
+    prompts = answer(monkeypatch, "n", *TAKE * 3)
+    assert main(["voice", "record", "francesca", "--all", "-y"]) == 0
+    assert "francesca, francesca-sad" in prompts[0]
+    assert profile_store.profiles["francesca"][2] == "old"
+    assert profile_store.profiles["francesca-sad"][2] == "old"
+    assert len(profile_store.profiles) == 5
+    out = capsys.readouterr().out
+    assert "[1/3] whisper" in out
+    assert re.search(r"sad\s+clone:francesca-sad\s+already cloned", out)
+
+
+def test_voice_record_all_with_every_register_cloned_has_nothing_to_do(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, recorder, monkeypatch, capsys
+):
+    for pid in ["francesca", *(f"francesca-{r}" for r in ALL_REGISTERS[1:])]:
+        profile_store.profiles[pid] = (b"", "old.wav", "old")
+    answer(monkeypatch, "n")
+    assert main(["voice", "record", "francesca", "--all", "-y"]) == 0
+    assert "--overwrite" in capsys.readouterr().out
+    assert recorder.started == 0
+
+
+def test_voice_record_all_skip_and_quit(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, recorder, monkeypatch, capsys
+):
+    answer(monkeypatch, "s", *TAKE, "q")
+    assert main(["voice", "record", "francesca", "--all", "-y"]) == 0
+    assert list(profile_store.profiles) == ["francesca-whisper"]
+    out = capsys.readouterr().out
+    assert re.search(r"neutral\s+clone:francesca\s+skipped", out)
+    assert re.search(r"happy\s+clone:francesca-happy\s+not recorded", out)
+
+
+def test_voice_record_all_quit_at_once_records_nothing(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, recorder, monkeypatch, capsys
+):
+    answer(monkeypatch, "q")
+    assert main(["voice", "record", "francesca", "--all", "-y"]) == 1
+    assert "Nothing recorded" in capsys.readouterr().err
+
+
+def test_voice_record_all_goes_on_after_a_failed_upload(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, recorder, monkeypatch, capsys
+):
+    from voxello.errors import TTS_PROVIDER_ERROR
+
+    original_create = profile_store.create_voice_profile
+
+    async def flaky_create(profile_id, *args, **kwargs):
+        if profile_id == "francesca-whisper":
+            raise VoxelloError(TTS_PROVIDER_ERROR, "boom")
+        return await original_create(profile_id, *args, **kwargs)
+
+    monkeypatch.setattr(profile_store, "create_voice_profile", flaky_create)
+    answer(monkeypatch, *TAKE * 5)
+    assert main(["voice", "record", "francesca", "--all", "-y"]) == 1
+    assert len(profile_store.profiles) == 4
+    captured = capsys.readouterr()
+    assert "voxello voice clone francesca-whisper" in captured.err
+    assert re.search(r"whisper\s+clone:francesca-whisper\s+upload failed", captured.out)
+    assert (isolated_env / "voices" / "francesca-whisper.wav").exists()
+
+
+def test_voice_record_all_rejects_text_register_and_unknown_languages(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, recorder, capsys
+):
+    assert main(["voice", "record", "x", "--all", "--text", "Ciao."]) == 1
+    assert "invalid_parameter" in capsys.readouterr().err
+    assert main(["voice", "record", "x", "--all", "-l", "fr"]) == 1
+    assert "--register" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        main(["voice", "record", "x", "--all", "--register", "sad"])
+    assert recorder.started == 0
+
+
+def test_blocking_player_waits_for_the_backend(monkeypatch, tmp_path: Path, capsys):
+    import voxello.cli as cli
+    import voxello.playback.detect as detect
+    from voxello.playback.backends import Afplay
+
+    runs: list[list[str]] = []
+    monkeypatch.setattr(detect, "detect_backend", lambda _preferred: Afplay())
+    monkeypatch.setattr(cli.subprocess, "run", lambda argv, **_kw: runs.append(argv))
+    cli._blocking_player(Settings())(tmp_path / "a.wav")
+    assert runs == [["afplay", "-v", "0.80", str(tmp_path / "a.wav")]]
+    monkeypatch.setattr(detect, "detect_backend", lambda _preferred: None)
+    cli._blocking_player(Settings())(tmp_path / "a.wav")
+    assert "no audio player found" in capsys.readouterr().err
+
+
+def test_doctor_recorder_line(monkeypatch):
+    import voxello.recording.ffmpeg as ffmpeg
+    from voxello.cli import describe_recorder
+    from voxello.errors import RECORDER_UNAVAILABLE
+
+    linux = ffmpeg.FfmpegRecorder("/usr/bin/ffmpeg", ["-f", "pulse", "-i", "default"], "linux")
+    monkeypatch.setattr(ffmpeg, "detect_recorder", lambda **_kw: linux)
+    assert describe_recorder() == "Recorder: ffmpeg (pulse default)"
+
+    def unavailable(**_kw):
+        raise VoxelloError(RECORDER_UNAVAILABLE, "needs ffmpeg")
+
+    monkeypatch.setattr(ffmpeg, "detect_recorder", unavailable)
+    assert describe_recorder() == "Recorder: unavailable (needs ffmpeg)"
 
 
 def test_voice_list_shows_designs_even_when_the_server_is_down(

@@ -19,9 +19,10 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import IO, Any, cast
+from typing import IO, TYPE_CHECKING, Any, cast
 
 from voxello import __version__, hooks, install
 from voxello.config import (
@@ -37,6 +38,11 @@ from voxello.core.models import VoiceRole
 from voxello.errors import INVALID_PARAMETER, VoxelloError
 from voxello.logging_setup import configure_logging
 from voxello.tts.base import TTSProvider, VoiceInfo
+
+if TYPE_CHECKING:
+    from voxello.core.voices import VoiceChange
+    from voxello.recording.registers import ReadingScript
+    from voxello.recording.session import Clip
 
 log = logging.getLogger(__name__)
 
@@ -243,6 +249,53 @@ def build_parser() -> argparse.ArgumentParser:
     update.add_argument("name")
     update.add_argument("--audio", type=Path, default=None, help="New reference recording")
     update.add_argument("--ref-text", default=None, help="New transcript")
+    record = voice_sub.add_parser(
+        "record",
+        help="Record a reference clip with guidance and clone it",
+        description=(
+            "Shows how and what to read, records from the microphone with ffmpeg until Enter, "
+            "cleans the clip, plays it back and, once accepted, clones it as NAME (register "
+            "neutral) or NAME-REGISTER, with the read text as transcript. --all records every "
+            "built-in register in one session. Run it in your own terminal. Asks you to confirm "
+            "you have the speaker's permission unless --yes."
+        ),
+    )
+    record.add_argument("name", help="Voice name: letters, digits, '-' or '_'")
+    which = record.add_mutually_exclusive_group()
+    which.add_argument(
+        "--all",
+        action="store_true",
+        help="Record every built-in register in one session (neutral, whisper, sad, angry, "
+        "happy), with one permission prompt",
+    )
+    which.add_argument(
+        "--register",
+        "-r",
+        default="neutral",
+        help="How the voice speaks in this clip: neutral (default), whisper, sad, angry, happy, "
+        "or a name of your own together with --text",
+    )
+    record.add_argument(
+        "--language", "-l", default=None, help="Language of the text to read (default: speech)"
+    )
+    record.add_argument("--text", default=None, help="Read this sentence instead of the built-in")
+    record.add_argument(
+        "--device",
+        default=None,
+        help="Microphone: avfoundation index on macOS (default 0), PulseAudio/ALSA source on "
+        "Linux (default 'default')",
+    )
+    record.add_argument(
+        "--no-keep",
+        action="store_true",
+        help="Delete the clip after cloning (by default it stays in storage.recordings_dir)",
+    )
+    record.add_argument(
+        "--overwrite", action="store_true", help="Replace an existing profile without asking"
+    )
+    record.add_argument(
+        "--yes", "-y", action="store_true", help="Confirm the speaker's permission without asking"
+    )
     delete = voice_sub.add_parser("delete", help="Delete a cloned voice from the TTS server")
     delete.add_argument("name")
     delete.add_argument("--yes", "-y", action="store_true", help="Delete without asking")
@@ -347,6 +400,8 @@ def main(argv: list[str] | None = None) -> int:
         if command == "cache":
             return cmd_cache(_load(args), args)
         if command == "voice":
+            if args.voice_command == "record":
+                return cmd_voice_record(_load(args), args)
             return asyncio.run(cmd_voice(_load(args), args))
         if command == "install":
             return cmd_install(args)
@@ -456,6 +511,7 @@ async def cmd_doctor(
 
     notifier = detect_notifier_command()
     print(f"Desktop notifications: {notifier or 'no tool found'}")
+    print(describe_recorder())
     print(f"Temp dir: {settings.storage.resolved_temp_dir()}")
     print(f"Output dir: {settings.output.resolved_directory()}")
     print(describe_cache(settings))
@@ -1010,6 +1066,225 @@ def _evicted(count: int) -> str:
     if not count:
         return ""
     return f" ({count} cached phrase{'s' if count != 1 else ''} dropped)"
+
+
+def cmd_voice_record(settings: Settings, args: argparse.Namespace) -> int:
+    """``voice record``: guided recording, then the same upload as ``voice clone`` (8.2).
+
+    One register, or every built-in register of the language with ``--all`` (one consent,
+    skip per register, each accepted clip cloned at once so an interruption loses nothing).
+    Synchronous on purpose: the speaker's keyboard drives the loop, and the server calls
+    (which profiles exist, clone one) run in their own short event loops around it.
+    """
+    from voxello.errors import RECORDER_UNAVAILABLE
+    from voxello.recording import ffmpeg
+    from voxello.recording.registers import available_registers, profile_name, reading_script
+    from voxello.recording.session import Clip, ConsoleTerminal, GuidedRecording, Stop
+
+    language = (args.language or settings.speech.default_language).strip().lower()
+    if args.all:
+        if args.text is not None:
+            raise VoxelloError(
+                INVALID_PARAMETER,
+                "--all reads the built-in sentences; record a register of your own with "
+                "--register NAME --text TEXT.",
+            )
+        scripts = list(available_registers(language).values())
+        if not scripts:
+            raise VoxelloError(
+                INVALID_PARAMETER,
+                f"No built-in registers for language '{language}'; record them one at a time "
+                "with --register NAME --text TEXT.",
+            )
+    else:
+        scripts = [reading_script(args.register, language, args.text)]
+    plan = [(script, profile_name(args.name, script.register)) for script in scripts]
+    many = len(plan) > 1
+    if not sys.stdin.isatty():
+        raise VoxelloError(
+            RECORDER_UNAVAILABLE,
+            "`voxello voice record` needs an interactive terminal: run it in your own shell.",
+        )
+    recorder = ffmpeg.detect_recorder(device=args.device)
+    names = ", ".join(profile_id for _, profile_id in plan)
+    consent = _confirm(
+        f"Record and clone the voice{'s' if many else ''} {names}? "
+        "Confirm the speaker has given permission.",
+        args.yes,
+    )
+    if not consent:
+        print(
+            "Not recorded: only voices whose owner has given permission should be cloned.",
+            file=sys.stderr,
+        )
+        return 1
+
+    status: dict[str, str] = {}
+    overwrite = args.overwrite
+    if not overwrite:
+        wanted = {profile_id for _, profile_id in plan}
+        existing = asyncio.run(_existing_profiles(settings)) & wanted
+        if existing:
+            listed = ", ".join(pid for _, pid in plan if pid in existing)
+            question = (
+                f"Already cloned: {listed}. Record them again and replace them?"
+                if many
+                else f"A cloned voice '{listed}' already exists. Replace it?"
+            )
+            if _confirm(question, False):
+                overwrite = True
+            elif not many:
+                print("Not recorded: pass --overwrite to replace the profile.", file=sys.stderr)
+                return 1
+            else:
+                status = dict.fromkeys(existing, "already cloned")
+                if len(status) == len(plan):
+                    print("Every register is already cloned; pass --overwrite to record again.")
+                    return 0
+
+    directory = settings.storage.resolved_recordings_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    print(f"Recorder: {recorder.describe()}. Quiet room, 20-30 cm from the microphone.")
+    todo = [(script, pid) for script, pid in plan if pid not in status]
+    if many:
+        print(
+            f"{len(todo)} register{'s' if len(todo) != 1 else ''} to record: "
+            f"{', '.join(script.register for script, _ in todo)}. Each one is cloned as soon as "
+            "you accept it; s skips a register, q or Ctrl-C stops."
+        )
+    session = GuidedRecording(recorder, _blocking_player(settings), ConsoleTerminal())
+    for index, (script, profile_id) in enumerate(todo, 1):
+        if many:
+            print(f"\n[{index}/{len(todo)}] {script.register} -> clone:{profile_id}")
+        outcome = session.run(script, directory / f"{profile_id}.pending.wav", can_skip=many)
+        if outcome is Stop.QUIT:
+            break
+        if isinstance(outcome, Clip):
+            ok = _keep_and_clone(settings, args, script, profile_id, language, outcome, overwrite)
+            status[profile_id] = "created" if ok else "upload failed"
+        else:
+            status[profile_id] = "skipped"
+
+    created = [pid for pid, result in status.items() if result == "created"]
+    failed = any(result == "upload failed" for result in status.values())
+    if many:
+        print("\nSummary:")
+        width = max(len(script.register) for script, _ in plan)
+        for script, pid in plan:
+            print(f"  {script.register:<{width}}  clone:{pid}  {status.get(pid, 'not recorded')}")
+    if not created and not failed:
+        print("Nothing recorded.", file=sys.stderr)
+        return 1
+    if created:
+        print(f'Try it: voxello speak "Ciao, sono la tua nuova voce." --voice clone:{created[0]}')
+    return 1 if failed else 0
+
+
+def _keep_and_clone(
+    settings: Settings,
+    args: argparse.Namespace,
+    script: ReadingScript,
+    profile_id: str,
+    language: str,
+    clip: Clip,
+    overwrite: bool,
+) -> bool:
+    """Move an accepted take next to its JSON sidecar and clone it; ``False`` if that failed.
+
+    The clip is written before the upload so a failure never loses the recording.
+    """
+    directory = clip.path.parent
+    clip_path = directory / f"{profile_id}.wav"
+    meta_path = directory / f"{profile_id}.json"
+    os.replace(clip.path, clip_path)
+    meta = {
+        "profile": profile_id,
+        "register": script.register,
+        "language": language,
+        "ref_text": script.text,
+        "seconds": clip.seconds,
+        "recorded_at": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        change = asyncio.run(
+            _clone_recording(settings, profile_id, clip_path, script.text, overwrite)
+        )
+    except VoxelloError as exc:
+        import shlex
+
+        retry = f"voxello voice clone {profile_id} {shlex.quote(str(clip_path))} --ref-text "
+        retry += shlex.quote(script.text) + (" --overwrite" if overwrite else "")
+        print(f"error: {exc}", file=sys.stderr)
+        print(f"The recording is kept; to retry: {retry}", file=sys.stderr)
+        return False
+    for warning in change.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+    if args.no_keep:
+        clip_path.unlink(missing_ok=True)
+        meta_path.unlink(missing_ok=True)
+        kept = ""
+    else:
+        kept = f" Clip kept at {clip_path}."
+    print(f"Cloned voice '{change.profile.profile_id}' created{_evicted(change.evicted)}.{kept}")
+    return True
+
+
+async def _existing_profiles(settings: Settings) -> set[str]:
+    from voxello.core.voices import VoiceLibrary
+    from voxello.tts.voicestudio import VoiceStudioProvider
+
+    store = VoiceStudioProvider(settings.tts.voicestudio)
+    try:
+        profiles = await VoiceLibrary(store).list()
+    finally:
+        await store.aclose()
+    return {profile.profile_id for profile in profiles}
+
+
+async def _clone_recording(
+    settings: Settings, profile_id: str, clip: Path, ref_text: str, overwrite: bool
+) -> VoiceChange:
+    from voxello.core.service import VoxelloService
+    from voxello.core.voices import VoiceLibrary
+    from voxello.tts.voicestudio import VoiceStudioProvider
+
+    store = VoiceStudioProvider(settings.tts.voicestudio)
+    try:
+        library = VoiceLibrary(store, VoxelloService.cache_files(settings))
+        return await library.clone(profile_id, clip, ref_text=ref_text, overwrite=overwrite)
+    finally:
+        await store.aclose()
+
+
+def _blocking_player(settings: Settings) -> Callable[[Path], None]:
+    """Play a file and wait for it: the recording loop needs nothing more than that."""
+    from voxello.playback.detect import detect_backend
+
+    backend = detect_backend(settings.playback.backend)
+    if backend is None:
+        return lambda path: print(f"(no audio player found; listen to {path})", file=sys.stderr)
+
+    def play(path: Path) -> None:
+        subprocess.run(
+            backend.build_command(path, settings.playback.volume),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+
+    return play
+
+
+def describe_recorder() -> str:
+    """The ``doctor`` line for ``voice record``; informational, never a failure."""
+    from voxello.recording import ffmpeg
+
+    try:
+        return f"Recorder: {ffmpeg.detect_recorder().describe()}"
+    except VoxelloError as exc:
+        return f"Recorder: unavailable ({exc.message})"
 
 
 def describe_installation() -> list[str]:

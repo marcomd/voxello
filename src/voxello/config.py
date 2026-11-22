@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal
 
 import yaml
-from platformdirs import user_cache_dir, user_config_dir
+from platformdirs import user_cache_dir, user_config_dir, user_data_dir
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
@@ -282,11 +282,21 @@ class StorageSettings(BaseModel):
     temp_dir: Path | None = Field(default=None, description="Defaults to the OS cache dir.")
     temp_retention_minutes: int = Field(default=10, ge=1)
     cleanup_on_start: bool = True
+    recordings_dir: Path | None = Field(
+        default=None,
+        description="Where `voxello voice record` keeps the reference clips it uploads, so a "
+        "voice can be cloned again on another server. Defaults to the OS data dir.",
+    )
 
     def resolved_temp_dir(self) -> Path:
         if self.temp_dir is not None:
             return self.temp_dir.expanduser()
         return Path(user_cache_dir(APP_NAME)) / "tmp"
+
+    def resolved_recordings_dir(self) -> Path:
+        if self.recordings_dir is not None:
+            return self.recordings_dir.expanduser()
+        return Path(user_data_dir(APP_NAME)) / "voices"
 
 
 class CacheSettings(BaseModel):
@@ -364,6 +374,15 @@ class Settings(BaseSettings):
         # only works while the two directories differ.
         if self.cache.resolved_directory().resolve() == self.storage.resolved_temp_dir().resolve():
             raise ValueError("cache.directory must differ from storage.temp_dir")
+        recordings = self.storage.resolved_recordings_dir().resolve()
+        if recordings in (
+            self.cache.resolved_directory().resolve(),
+            self.storage.resolved_temp_dir().resolve(),
+        ):
+            # Both directories get swept of WAV files; recorded voices must never be.
+            raise ValueError(
+                "storage.recordings_dir must differ from storage.temp_dir and cache.directory"
+            )
         return self
 
     @model_validator(mode="after")
@@ -615,6 +634,7 @@ integrations:                           # what Claude Code and Codex say, and wi
 storage:
   temp_retention_minutes: 10
   cleanup_on_start: true
+  # recordings_dir: ~/voices        # clips kept by `voxello voice record`; default: OS data dir
 
 cache:                                  # synthesize repeated phrases (hook alerts) only once
   enabled: true
