@@ -44,7 +44,13 @@ from voxello.errors import (
     VoxelloError,
 )
 from voxello.storage.wav import is_wav
-from voxello.tts.base import ProviderHealth, SynthesisResult, VoiceInfo, VoiceProfile
+from voxello.tts.base import (
+    ProviderHealth,
+    SynthesisOptions,
+    SynthesisResult,
+    VoiceInfo,
+    VoiceProfile,
+)
 
 log = logging.getLogger(__name__)
 
@@ -90,6 +96,7 @@ class VoiceStudioProvider:
         voice: str | None,
         language: str | None = None,
         instructions: str | None = None,
+        options: SynthesisOptions | None = None,
     ) -> dict[str, Any]:
         s = self.settings
         payload: dict[str, Any] = {
@@ -110,6 +117,8 @@ class VoiceStudioProvider:
             "guidance_scale": s.guidance_scale,
         }
         payload.update({k: v for k, v in optional.items() if v is not None})
+        if options is not None:
+            payload.update(options.as_payload())
         return payload
 
     async def synthesize(
@@ -118,12 +127,14 @@ class VoiceStudioProvider:
         voice: str | None = None,
         language: str | None = None,
         instructions: str | None = None,
+        *,
+        options: SynthesisOptions | None = None,
     ) -> SynthesisResult:
         if len(text) > MAX_INPUT_CHARS:
             raise VoxelloError(
                 TTS_PROVIDER_ERROR, f"VoiceStudio accepts at most {MAX_INPUT_CHARS} characters."
             )
-        payload = self._payload(text, voice, language, instructions)
+        payload = self._payload(text, voice, language, instructions, options)
         response = await self._post_speech(payload)
 
         voice_label = payload.get("voice") or (

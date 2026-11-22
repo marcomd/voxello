@@ -1,0 +1,20 @@
+# Reading scripts for `voxello voice record --register <name> --language it`.
+# Each register is cloned as its own profile (`marco-whisper`); OmniVoice carries the delivery
+# of the reference clip into what it synthesizes. `hint` tells the speaker how to read,
+# `text` is read verbatim and becomes the profile's ref_text. About 6-9 s of reading each.
+# Every language file has the same keys (tests/test_recording.py).
+neutral:
+  hint: "Tono normale, come se leggessi un messaggio a un amico."
+  text: "Ho controllato l'orario: il treno parte alle otto e venti. Se usciamo per le sette e mezza arriviamo con calma."
+whisper:
+  hint: "Sottovoce, come se qualcuno dormisse nella stanza accanto."
+  text: "Non fare rumore, dormono tutti. Prendo le chiavi e usciamo piano, senza accendere la luce."
+sad:
+  hint: "Triste e stanco: lento, con poca energia."
+  text: "Non importa, davvero. Pensavo che oggi sarebbe andata diversamente, ma va bene così. Torniamo a casa."
+angry:
+  hint: "Irritato ma trattenuto: non urli, sei stufo. Calca le parole."
+  text: "Te l'ho già detto tre volte. Non è difficile: le chiavi vanno sul mobile, non nella tasca della giacca."
+happy:
+  hint: "Allegro, sorridendo mentre parli. Esagera un po': il clone attenua l'emozione."
+  text: "Ma dai, l'hai trovata davvero! Era l'ultima, lo sapevo che ce l'avresti fatta. Adesso però la dividiamo."

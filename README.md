@@ -134,6 +134,29 @@ owner agreed, and never treat a voice as proof of identity. Cloning is CLI-only;
 a cloned voice but cannot create one. Updating or deleting a voice through Voxello also drops the
 phrases cached with it; if you change profiles directly on the server, run `voxello cache clear`.
 
+**Guided recording.** `voxello voice record` records the clip for you and clones it, so you
+do not need a recorder or a transcript. Run it in your own terminal; it needs `ffmpeg`
+(`brew install ffmpeg`, `apt install ffmpeg`) and works on macOS and Linux:
+
+```bash
+voxello voice record marco                      # neutral clip -> clone:marco
+voxello voice record marco --register whisper   # -> clone:marco-whisper
+voxello voice record marco -r grumpy --text "Una frase da leggere con quel tono."
+```
+
+It shows how to read (a tone hint) and what to read (a sentence of about 8 seconds), counts
+down, records until you press Enter, trims the silence, evens the loudness, says how long the
+clip is and plays it back; you accept it, record again or replay it. The sentence you read
+becomes the transcript, so nothing is transcribed. OmniVoice has no emotion control but
+carries the tone of the reference clip into what it says, so each **register** (`neutral`,
+`whisper`, `sad`, `angry`, `happy`, or one of your own with `--text`) is a profile of its own.
+In our tests whisper carried over clearly, sad well, angry and happy less: overdo those a
+little when you read. Accepted clips stay in `storage.recordings_dir` (default: the OS data
+directory) next to a small JSON with their transcript, so you can clone them again on another
+server; `--no-keep` deletes them after cloning. `--device` picks the microphone (macOS: the
+avfoundation index, `ffmpeg -f avfoundation -list_devices true -i ""` lists them; Linux: a
+PulseAudio or ALSA source). The same permission prompt as `clone` applies.
+
 **Voice design** describes a voice instead of picking one, with at most one attribute per
 category: gender (`male`, `female`), age (`child`, `teenager`, `young adult`, `middle-aged`,
 `elderly`), pitch (`very low pitch` ... `very high pitch`), style (`whisper`) and, for English

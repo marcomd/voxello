@@ -52,6 +52,7 @@ integrations:                           # what Claude Code and Codex say, and wi
 storage:
   temp_retention_minutes: 10
   cleanup_on_start: true
+  # recordings_dir: ~/voices        # clips kept by `voxello voice record`; default: OS data dir
 
 cache:                                  # synthesize repeated phrases (hook alerts) only once
   enabled: true

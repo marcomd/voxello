@@ -89,6 +89,23 @@ def test_cache_directory_must_differ_from_temp_dir(tmp_path: Path):
     assert settings.cache.resolved_directory() == tmp_path / "audio"
 
 
+@pytest.mark.parametrize("other", ["temp", "cache"])
+def test_recordings_dir_is_never_a_directory_that_gets_cleaned(tmp_path: Path, other: str):
+    """The temp sweeper and cache eviction delete WAV files; recorded voices must survive."""
+    dirs = {"temp": tmp_path / "tmp", "cache": tmp_path / "audio"}
+    with pytest.raises(ValidationError, match="recordings_dir"):
+        Settings(
+            storage={"temp_dir": dirs["temp"], "recordings_dir": dirs[other]},
+            cache={"directory": dirs["cache"]},
+        )
+
+
+def test_recordings_dir_defaults_to_the_data_dir(tmp_path: Path):
+    assert Settings().storage.resolved_recordings_dir().name == "voices"
+    custom = Settings(storage={"recordings_dir": tmp_path / "v"})
+    assert custom.storage.resolved_recordings_dir() == tmp_path / "v"
+
+
 def test_example_config_matches_repo_file():
     """`voxello config init` writes EXAMPLE_CONFIG; config.example.yaml documents the same."""
     assert (REPO / "config.example.yaml").read_text(encoding="utf-8") == EXAMPLE_CONFIG

@@ -7,6 +7,20 @@ change the MCP tool signatures or the configuration layout.
 
 ## [Unreleased]
 
+### Added
+
+- `voxello voice record NAME [--register R]` records a reference clip with guidance (tone hint,
+  sentence to read, countdown, record until Enter, cleanup with ffmpeg, playback, redo) and
+  clones it as `NAME` or `NAME-REGISTER` with the read sentence as transcript, after the same
+  permission prompt as `voice clone`. Built-in registers `neutral`, `whisper`, `sad`, `angry`
+  and `happy` with Italian and English sentences; `--text` for your own. Clips are kept in the
+  new `storage.recordings_dir` unless `--no-keep`. macOS and Linux; needs `ffmpeg`.
+  `voxello doctor` prints a `Recorder:` line. New error codes `recorder_unavailable` and
+  `recording_failed`.
+- The TTS provider accepts per-request `seed`, `speed` and `num_step`
+  (`SynthesisOptions`): the same seed reproduces the same audio. `speak` and `notify` do not
+  use them yet, so their requests and cache keys are unchanged.
+
 ## [0.3.0] - 2026-11-21
 
 Per-request language selection (roadmap milestone 3), quality and robustness work (roadmap

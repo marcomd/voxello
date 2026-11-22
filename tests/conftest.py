@@ -15,7 +15,13 @@ from voxello.core.service import VoxelloService
 from voxello.errors import TTS_PROVIDER_UNAVAILABLE, VoxelloError
 from voxello.storage.cache import AudioCache
 from voxello.storage.files import OutputStore, TempStore
-from voxello.tts.base import ProviderHealth, SynthesisResult, VoiceInfo, VoiceProfile
+from voxello.tts.base import (
+    ProviderHealth,
+    SynthesisOptions,
+    SynthesisResult,
+    VoiceInfo,
+    VoiceProfile,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -48,6 +54,7 @@ class FakeProvider:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str | None, str | None]] = []
         self.instructions: list[str | None] = []  # kept apart so `calls` stays a 3-tuple
+        self.options: list[SynthesisOptions | None] = []
         self.fail_with: VoxelloError | None = None
         self.duration_ms = 500
         self.delay = 0.0
@@ -60,9 +67,12 @@ class FakeProvider:
         voice: str | None = None,
         language: str | None = None,
         instructions: str | None = None,
+        *,
+        options: SynthesisOptions | None = None,
     ) -> SynthesisResult:
         self.calls.append((text, voice, language))
         self.instructions.append(instructions)
+        self.options.append(options)
         if self.delay:
             await asyncio.sleep(self.delay)
         if self.fail_with is not None:

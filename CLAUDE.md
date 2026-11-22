@@ -36,6 +36,7 @@ uv run voxello cache list|clear                   # audio cache: hash, size, cha
 uv run voxello cache warm --hook-phrases --language it|en   # or: cache warm FILE, cache warm -
 uv run voxello speak "text" -l en -i "female, young adult, high pitch"   # voice design
 uv run voxello voice list|clone NAME FILE [--ref-text T] [--yes]|update NAME|delete NAME
+uv run voxello voice record NAME [--register whisper] [--text T] [--no-keep]  # guided, needs ffmpeg
 uv run voxello serve                              # MCP server over stdio (what agents run)
 uv run voxello config init|path|show
 uv run voxello install claude [--yes] [--stop-hook] [--claude-dir DIR]   # skill + hook into ~/.claude, offer settings.json entries
@@ -102,14 +103,24 @@ Layers, top to bottom, each depending only on the ones below:
 - `tts/voicestudio.py` is the only provider. It speaks `POST /v1/audio/speech` and probes
   alternative paths for voices/engines because VoiceStudio and omnivoice-server differ
   (`VOICES_PATHS`, `ENGINES_PATHS`). HTTP failures are translated into stable error codes.
-  `instructions` is sent only when set, and the configured voice is not added then. An unknown
-  `clone:<id>` voice is a 404 mapped to `voice_not_found`; rejected attributes are
-  `invalid_instructions`. Profile requests (`create/update/delete/list_voice_profiles`) are
+  `instructions` is sent only when set, and the configured voice is not added then.
+  `synthesize(..., options=SynthesisOptions(seed, speed, num_step))` overrides the configured
+  generation values for one request (roadmap 8.1); the service never passes it, so cache keys
+  are unaffected. An unknown `clone:<id>` voice is a 404 mapped to `voice_not_found`; rejected
+  attributes are `invalid_instructions`. Profile requests (`create/update/delete/list_voice_profiles`) are
   never retried; a bare FastAPI 404/405 means `voice_cloning_unsupported` (e.g. VoiceStudio).
   `_post_speech` retries `tts.voicestudio.retries` times (default 1) with exponential backoff
   from `retry_backoff_seconds` on connection-phase failures (`RETRIABLE_EXCEPTIONS`) and HTTP
   502/503/504 (`RETRIABLE_STATUSES`); 4xx and read timeouts are never retried because a slow
   server would double the time `_synth_lock` is held. `details["attempts"]` is set on the error.
+- `recording/` (roadmap 8.2) is behind `voxello voice record`: `registers.py` loads the
+  reading scripts from `assets/dialogue/registers/{it,en}.yaml` (same keys in every file) and
+  names profiles (`marco`, `marco-whisper`); `ffmpeg.py` builds the capture (avfoundation,
+  pulse/alsa; Windows raises `recorder_unavailable`) and cleanup commands, stopping a capture
+  by sending `q` on stdin; `session.py` is the record/listen/redo loop with an injected
+  terminal, recorder and player. `cli.cmd_voice_record` is synchronous (the keyboard drives
+  it) and runs the profile check and the upload in their own `asyncio.run`; accepted clips
+  stay in `storage.recordings_dir`, which `Settings` keeps apart from the temp and cache dirs.
 - `notifications/desktop.py` picks `terminal-notifier`, `osascript`, `notify-send` or PowerShell.
   On Windows the toast needs Windows PowerShell 5.1 (`powershell`); `pwsh` is a playback-only
   fallback (`playback/backends.py`) because the WinRT projection is unavailable in PowerShell 7.
