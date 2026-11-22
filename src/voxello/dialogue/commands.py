@@ -412,6 +412,8 @@ class ConsoleReviewTerminal:
         self._restore()
 
     def _cbreak(self) -> None:
+        if sys.platform == "win32":
+            return
         if self.fd is None:
             return
         import termios
@@ -421,6 +423,8 @@ class ConsoleReviewTerminal:
         tty.setcbreak(self.fd)
 
     def _restore(self) -> None:
+        if sys.platform == "win32":
+            return
         if self.fd is None or self._saved is None:
             return
         import termios
