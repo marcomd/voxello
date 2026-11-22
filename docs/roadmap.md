@@ -333,7 +333,9 @@ Reading texts and tone hints per register and language in
 `angry`, `happy`; custom registers need `--text`). The flow: show tone hint and text, countdown,
 record until Enter (bounded at 15 s), clean, check 3-10 s, play back, accept / redo / quit,
 then the existing consent prompt and `VoiceLibrary.clone()` of `NAME` (register `neutral`) or
-`NAME-REGISTER` with the read text as `ref_text`. The cleaned clip is kept under
+`NAME-REGISTER` with the read text as `ref_text`. `--all` records every built-in register in one session (one
+consent, skip per register, only the missing ones on request, summary at the end); the
+step-by-step guide is `docs/recording-voices.md`. The cleaned clip is kept under
 `user_data_dir/voices/` unless `--no-keep`, for re-cloning on another server. `doctor` reports
 the recorder backend.
 

@@ -26,7 +26,7 @@ from voxello.recording.registers import (
     profile_name,
     reading_script,
 )
-from voxello.recording.session import Clip, GuidedRecording
+from voxello.recording.session import Clip, GuidedRecording, Stop
 
 from .conftest import make_wav
 
@@ -301,17 +301,19 @@ SCRIPT = ReadingScript("whisper", "Sottovoce.", "Non fare rumore, dormono tutti.
 
 
 def run_session(
-    tmp_path: Path, recorder: FakeRecorder, *answers: str | BaseException
-) -> tuple[Clip | None, ScriptedTerminal, list[Path]]:
+    tmp_path: Path, recorder: FakeRecorder, *answers: str | BaseException, can_skip: bool = False
+) -> tuple[Clip | Stop, ScriptedTerminal, list[Path]]:
     terminal = ScriptedTerminal(*answers)
     played: list[Path] = []
     session = GuidedRecording(recorder, played.append, terminal, sleep=lambda _s: None)
-    return session.run(SCRIPT, tmp_path / "marco-whisper.wav"), terminal, played
+    outcome = session.run(SCRIPT, tmp_path / "marco-whisper.wav", can_skip=can_skip)
+    return outcome, terminal, played
 
 
 def test_session_records_cleans_plays_back_and_accepts(tmp_path: Path):
     recorder = FakeRecorder(6000)
     clip, terminal, played = run_session(tmp_path, recorder, "", "", "a")
+    assert isinstance(clip, Clip)
     assert clip == Clip(tmp_path / "marco-whisper.wav", 6.0, [])
     assert clip.path.exists()
     assert played == [clip.path]
@@ -325,7 +327,7 @@ def test_session_records_cleans_plays_back_and_accepts(tmp_path: Path):
 def test_redo_and_replay(tmp_path: Path):
     recorder = FakeRecorder(1500, 7000)
     clip, terminal, played = run_session(tmp_path, recorder, "", "", "r", "", "", "p", "x", "a")
-    assert clip is not None and clip.seconds == 7.0
+    assert isinstance(clip, Clip) and clip.seconds == 7.0
     assert recorder.started == 2
     assert len(played) == 3, "first take, second take, replay of the second"
     assert any("1.5 s" in line and "3-10 s" in line for line in terminal.said)
@@ -333,15 +335,30 @@ def test_redo_and_replay(tmp_path: Path):
 
 def test_short_clip_carries_the_duration_warning(tmp_path: Path):
     clip, _, _ = run_session(tmp_path, FakeRecorder(2000), "", "", "a")
-    assert clip is not None and clip.warnings and "2.0 s" in clip.warnings[0]
+    assert isinstance(clip, Clip) and clip.warnings and "2.0 s" in clip.warnings[0]
 
 
 @pytest.mark.parametrize("answers", [("q",), ("", "", "q")])
 def test_quitting_records_nothing(tmp_path: Path, answers):
-    clip, _, _ = run_session(tmp_path, FakeRecorder(), *answers)
-    assert clip is None
+    clip, terminal, _ = run_session(tmp_path, FakeRecorder(), *answers)
+    assert clip is Stop.QUIT
+    assert all("skip" not in prompt for prompt in terminal.prompts), "skip only in --all"
     assert not (tmp_path / "marco-whisper.wav").exists()
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("answers", [("s",), ("", "", "s"), ("S ",)])
+def test_skipping_a_register(tmp_path: Path, answers):
+    recorder = FakeRecorder()
+    outcome, terminal, _ = run_session(tmp_path, recorder, *answers, can_skip=True)
+    assert outcome is Stop.SKIP
+    assert list(tmp_path.iterdir()) == [], "a skipped take leaves no file"
+    assert all("s skip" in prompt for prompt in terminal.prompts if prompt)
+
+
+def test_quit_is_still_quit_when_skipping_is_offered(tmp_path: Path):
+    outcome, _, _ = run_session(tmp_path, FakeRecorder(), "q", can_skip=True)
+    assert outcome is Stop.QUIT
 
 
 def test_interrupt_while_recording_stops_ffmpeg_and_cleans_up(tmp_path: Path):

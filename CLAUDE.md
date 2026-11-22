@@ -36,7 +36,7 @@ uv run voxello cache list|clear                   # audio cache: hash, size, cha
 uv run voxello cache warm --hook-phrases --language it|en   # or: cache warm FILE, cache warm -
 uv run voxello speak "text" -l en -i "female, young adult, high pitch"   # voice design
 uv run voxello voice list|clone NAME FILE [--ref-text T] [--yes]|update NAME|delete NAME
-uv run voxello voice record NAME [--register whisper] [--text T] [--no-keep]  # guided, needs ffmpeg
+uv run voxello voice record NAME [--all | --register whisper] [--text T] [--no-keep]  # guided, needs ffmpeg
 uv run voxello serve                              # MCP server over stdio (what agents run)
 uv run voxello config init|path|show
 uv run voxello install claude [--yes] [--stop-hook] [--claude-dir DIR]   # skill + hook into ~/.claude, offer settings.json entries
@@ -118,9 +118,11 @@ Layers, top to bottom, each depending only on the ones below:
   names profiles (`marco`, `marco-whisper`); `ffmpeg.py` builds the capture (avfoundation,
   pulse/alsa; Windows raises `recorder_unavailable`) and cleanup commands, stopping a capture
   by sending `q` on stdin; `session.py` is the record/listen/redo loop with an injected
-  terminal, recorder and player. `cli.cmd_voice_record` is synchronous (the keyboard drives
-  it) and runs the profile check and the upload in their own `asyncio.run`; accepted clips
-  stay in `storage.recordings_dir`, which `Settings` keeps apart from the temp and cache dirs.
+  terminal, recorder and player (`Stop.SKIP` only when `can_skip`, i.e. `--all`).
+  `cli.cmd_voice_record` is synchronous (the keyboard drives it) and runs the profile check
+  and each upload in their own `asyncio.run`; with `--all` every accepted clip is cloned
+  before the next register starts. Accepted clips stay in `storage.recordings_dir`, which
+  `Settings` keeps apart from the temp and cache dirs.
 - `notifications/desktop.py` picks `terminal-notifier`, `osascript`, `notify-send` or PowerShell.
   On Windows the toast needs Windows PowerShell 5.1 (`powershell`); `pwsh` is a playback-only
   fallback (`playback/backends.py`) because the WinRT projection is unavailable in PowerShell 7.

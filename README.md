@@ -134,28 +134,19 @@ owner agreed, and never treat a voice as proof of identity. Cloning is CLI-only;
 a cloned voice but cannot create one. Updating or deleting a voice through Voxello also drops the
 phrases cached with it; if you change profiles directly on the server, run `voxello cache clear`.
 
-**Guided recording.** `voxello voice record` records the clip for you and clones it, so you
-do not need a recorder or a transcript. Run it in your own terminal; it needs `ffmpeg`
-(`brew install ffmpeg`, `apt install ffmpeg`) and works on macOS and Linux:
+**Guided recording.** `voxello voice record` records the clip for you and clones it: no
+recorder app, no transcript. Run it in your own terminal (macOS or Linux, needs `ffmpeg`):
 
 ```bash
-voxello voice record marco                      # neutral clip -> clone:marco
-voxello voice record marco --register whisper   # -> clone:marco-whisper
-voxello voice record marco -r grumpy --text "Una frase da leggere con quel tono."
+voxello voice record francesca --all      # every register in one session
+voxello voice record francesca            # just the main (neutral) voice
 ```
 
-It shows how to read (a tone hint) and what to read (a sentence of about 8 seconds), counts
-down, records until you press Enter, trims the silence, evens the loudness, says how long the
-clip is and plays it back; you accept it, record again or replay it. The sentence you read
-becomes the transcript, so nothing is transcribed. OmniVoice has no emotion control but
-carries the tone of the reference clip into what it says, so each **register** (`neutral`,
-`whisper`, `sad`, `angry`, `happy`, or one of your own with `--text`) is a profile of its own.
-In our tests whisper carried over clearly, sad well, angry and happy less: overdo those a
-little when you read. Accepted clips stay in `storage.recordings_dir` (default: the OS data
-directory) next to a small JSON with their transcript, so you can clone them again on another
-server; `--no-keep` deletes them after cloning. `--device` picks the microphone (macOS: the
-avfoundation index, `ffmpeg -f avfoundation -list_devices true -i ""` lists them; Linux: a
-PulseAudio or ALSA source). The same permission prompt as `clone` applies.
+OmniVoice copies the tone of the clip it was cloned from, so each way of speaking
+(**register**: `neutral`, `whisper`, `sad`, `angry`, `happy`) becomes a voice of its own,
+`clone:francesca`, `clone:francesca-whisper` and so on. The command shows the sentence to read
+and how to read it, records until you press Enter, cleans up and plays back the clip, and lets
+you accept, redo or skip each one. **Step by step: [docs/recording-voices.md](docs/recording-voices.md).**
 
 **Voice design** describes a voice instead of picking one, with at most one attribute per
 category: gender (`male`, `female`), age (`child`, `teenager`, `young adult`, `middle-aged`,
@@ -558,6 +549,7 @@ artifacts and are not committed. For a focused test during development, pass its
 filter to `uv run pytest` without `--cov` so the whole-project coverage threshold does not apply.
 
 Docs: `docs/TUTORIAL.md` (setting up an omnivoice-server host on Windows/NVIDIA or Apple Silicon),
+`docs/recording-voices.md` (recording and cloning voices step by step),
 `docs/voxello-specification.md` (the specification), `docs/voicestudio-api.md` (VoiceStudio HTTP
 contract), `docs/omnivoice-server-api.md` (omnivoice-server flags and contract) and `docs/roadmap.md`
 (what comes next).

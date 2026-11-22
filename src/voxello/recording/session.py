@@ -14,6 +14,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Protocol
 
@@ -55,6 +56,13 @@ class ConsoleTerminal:
         return input(prompt)
 
 
+class Stop(Enum):
+    """How a session ended without an accepted clip."""
+
+    QUIT = "quit"  # stop recording altogether
+    SKIP = "skip"  # go on with the next register (offered by `voice record --all`)
+
+
 @dataclass(frozen=True)
 class Clip:
     path: Path
@@ -85,18 +93,22 @@ class GuidedRecording:
         self._sleep = sleep
         self.max_seconds = max_seconds
 
-    def run(self, script: ReadingScript, output: Path) -> Clip | None:
-        """Record until the speaker accepts a take; ``None`` when they quit."""
+    def run(self, script: ReadingScript, output: Path, *, can_skip: bool = False) -> Clip | Stop:
+        """Record until the speaker accepts a take, skips the register or quits."""
         say = self.terminal.say
         say(f"\n== {script.register}" + (f": {script.hint}" if script.hint else ""))
         say(f"\n    {script.text}\n")
         say("Read it exactly as written: it becomes the transcript of the cloned voice.")
         raw = output.with_name(f"{output.stem}.raw{output.suffix}")
+        skip = ", s skip" if can_skip else ""
         accepted = False
         try:
             while True:
-                if self.terminal.ask("Enter to record, q to quit > ").strip().lower() == "q":
-                    return None
+                start = self.terminal.ask(f"Enter to record{skip}, q quit > ").strip().lower()
+                if start == "q":
+                    return Stop.QUIT
+                if can_skip and start == "s":
+                    return Stop.SKIP
                 self._capture(raw)
                 try:
                     self.recorder.prepare(raw, output)
@@ -111,12 +123,14 @@ class GuidedRecording:
                 warnings = duration_warnings(seconds)
                 say(" ".join([f"{seconds:.1f} s after cleanup.", *warnings]))
                 self.play(output)
-                choice = self._review(output)
+                choice = self._review(output, can_skip)
                 if choice == "a":
                     accepted = True
                     return Clip(output, seconds, warnings)
                 if choice == "q":
-                    return None
+                    return Stop.QUIT
+                if choice == "s":
+                    return Stop.SKIP
         finally:
             raw.unlink(missing_ok=True)
             if not accepted:
@@ -138,11 +152,13 @@ class GuidedRecording:
             raise
         recording.stop()
 
-    def _review(self, output: Path) -> str:
+    def _review(self, output: Path, can_skip: bool) -> str:
+        skip = ", s skip" if can_skip else ""
+        answers = ("a", "r", "q", "s") if can_skip else ("a", "r", "q")
         while True:
-            choice = self.terminal.ask("a accept, r record again, p play again, q quit > ")
+            choice = self.terminal.ask(f"a accept, r record again, p play again{skip}, q quit > ")
             choice = choice.strip().lower()
-            if choice in ("a", "r", "q"):
+            if choice in answers:
                 return choice
             if choice == "p":
                 self.play(output)

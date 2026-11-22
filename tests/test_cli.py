@@ -822,6 +822,110 @@ def test_voice_record_reports_a_missing_recorder(
     assert "install ffmpeg" in capsys.readouterr().err
 
 
+ALL_REGISTERS = ["neutral", "whisper", "sad", "angry", "happy"]
+TAKE = ("", "", "a")  # Enter to record, Enter to stop, accept
+
+
+def test_voice_record_all_clones_every_register_with_one_consent(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, recorder, monkeypatch, capsys
+):
+    from voxello.recording.registers import available_registers
+
+    prompts = answer(monkeypatch, "y", *TAKE * 5)
+    assert main(["voice", "record", "francesca", "--all"]) == 0
+    scripts = available_registers("it")
+    expected = {
+        "francesca": scripts["neutral"].text,
+        **{f"francesca-{r}": scripts[r].text for r in ALL_REGISTERS[1:]},
+    }
+    assert {pid: text for pid, (_, _, text) in profile_store.profiles.items()} == expected
+    assert sum("permission" in prompt for prompt in prompts) == 1, "one consent for the session"
+    out = capsys.readouterr().out
+    assert "[1/5] neutral" in out and "[5/5] happy" in out
+    for register in ALL_REGISTERS[1:]:
+        assert re.search(rf"{register}\s+clone:francesca-{register}\s+created", out)
+
+
+def test_voice_record_all_records_only_the_missing_registers_when_asked(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, recorder, monkeypatch, capsys
+):
+    profile_store.profiles["francesca"] = (b"", "old.wav", "old")
+    profile_store.profiles["francesca-sad"] = (b"", "old.wav", "old")
+    prompts = answer(monkeypatch, "n", *TAKE * 3)
+    assert main(["voice", "record", "francesca", "--all", "-y"]) == 0
+    assert "francesca, francesca-sad" in prompts[0]
+    assert profile_store.profiles["francesca"][2] == "old"
+    assert profile_store.profiles["francesca-sad"][2] == "old"
+    assert len(profile_store.profiles) == 5
+    out = capsys.readouterr().out
+    assert "[1/3] whisper" in out
+    assert re.search(r"sad\s+clone:francesca-sad\s+already cloned", out)
+
+
+def test_voice_record_all_with_every_register_cloned_has_nothing_to_do(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, recorder, monkeypatch, capsys
+):
+    for pid in ["francesca", *(f"francesca-{r}" for r in ALL_REGISTERS[1:])]:
+        profile_store.profiles[pid] = (b"", "old.wav", "old")
+    answer(monkeypatch, "n")
+    assert main(["voice", "record", "francesca", "--all", "-y"]) == 0
+    assert "--overwrite" in capsys.readouterr().out
+    assert recorder.started == 0
+
+
+def test_voice_record_all_skip_and_quit(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, recorder, monkeypatch, capsys
+):
+    answer(monkeypatch, "s", *TAKE, "q")
+    assert main(["voice", "record", "francesca", "--all", "-y"]) == 0
+    assert list(profile_store.profiles) == ["francesca-whisper"]
+    out = capsys.readouterr().out
+    assert re.search(r"neutral\s+clone:francesca\s+skipped", out)
+    assert re.search(r"happy\s+clone:francesca-happy\s+not recorded", out)
+
+
+def test_voice_record_all_quit_at_once_records_nothing(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, recorder, monkeypatch, capsys
+):
+    answer(monkeypatch, "q")
+    assert main(["voice", "record", "francesca", "--all", "-y"]) == 1
+    assert "Nothing recorded" in capsys.readouterr().err
+
+
+def test_voice_record_all_goes_on_after_a_failed_upload(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, recorder, monkeypatch, capsys
+):
+    from voxello.errors import TTS_PROVIDER_ERROR
+
+    original_create = profile_store.create_voice_profile
+
+    async def flaky_create(profile_id, *args, **kwargs):
+        if profile_id == "francesca-whisper":
+            raise VoxelloError(TTS_PROVIDER_ERROR, "boom")
+        return await original_create(profile_id, *args, **kwargs)
+
+    monkeypatch.setattr(profile_store, "create_voice_profile", flaky_create)
+    answer(monkeypatch, *TAKE * 5)
+    assert main(["voice", "record", "francesca", "--all", "-y"]) == 1
+    assert len(profile_store.profiles) == 4
+    captured = capsys.readouterr()
+    assert "voxello voice clone francesca-whisper" in captured.err
+    assert re.search(r"whisper\s+clone:francesca-whisper\s+upload failed", captured.out)
+    assert (isolated_env / "voices" / "francesca-whisper.wav").exists()
+
+
+def test_voice_record_all_rejects_text_register_and_unknown_languages(
+    isolated_env: Path, profile_store: FakeVoiceProfileStore, recorder, capsys
+):
+    assert main(["voice", "record", "x", "--all", "--text", "Ciao."]) == 1
+    assert "invalid_parameter" in capsys.readouterr().err
+    assert main(["voice", "record", "x", "--all", "-l", "fr"]) == 1
+    assert "--register" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        main(["voice", "record", "x", "--all", "--register", "sad"])
+    assert recorder.started == 0
+
+
 def test_blocking_player_waits_for_the_backend(monkeypatch, tmp_path: Path, capsys):
     import voxello.cli as cli
     import voxello.playback.detect as detect
