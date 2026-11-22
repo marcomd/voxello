@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import sys
 from pathlib import Path
 
@@ -299,7 +300,8 @@ def test_review_runs_a_session_and_prints_a_summary(
     assert run(cfg, review_project, "review") == 0
     out = capsys.readouterr().out
     assert "Approved 1/5 lines" in out
-    assert f"voxello dialogue review -p {review_project}" in out
+    resume = out.split("Resume with: ", 1)[1].strip()
+    assert shlex.split(resume) == ["voxello", "dialogue", "review", "-p", str(review_project)]
     assert any(line.startswith("[1/5] p001.1") for line in keys.out)
 
 
