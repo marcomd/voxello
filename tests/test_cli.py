@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from pathlib import Path
 from typing import ClassVar
 
@@ -803,7 +804,7 @@ def test_voice_record_keeps_the_clip_when_the_upload_fails(
     clip = isolated_env / "voices" / "marco-sad.wav"
     assert clip.exists(), "a failed upload never loses the recording"
     assert "tts_provider_unavailable" in err
-    assert f"voxello voice clone marco-sad {clip} --ref-text" in err
+    assert f"voxello voice clone marco-sad {shlex.quote(str(clip))} --ref-text" in err
     monkeypatch.setattr(profile_store, "create_voice_profile", original_create)
 
 
