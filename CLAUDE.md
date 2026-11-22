@@ -37,6 +37,11 @@ uv run voxello cache warm --hook-phrases --language it|en   # or: cache warm FIL
 uv run voxello speak "text" -l en -i "female, young adult, high pitch"   # voice design
 uv run voxello voice list|clone NAME FILE [--ref-text T] [--yes]|update NAME|delete NAME
 uv run voxello voice record NAME [--all | --register whisper] [--text T] [--no-keep]  # guided, needs ffmpeg
+uv run voxello dialogue init chapter1.txt [DIR] [--max-chars 300]   # project dir + segments
+uv run voxello dialogue segments|show [-p DIR] [--from ID] [--count N] [--pending]
+uv run voxello dialogue annotate FILE|- [-p DIR]  # {id: {speaker, register, tts_text, ...}}
+uv run voxello dialogue check|stats [-p DIR]
+uv run voxello dialogue render [-p DIR] [--lines A-B] [--force]   # needs cast.yaml
 uv run voxello serve                              # MCP server over stdio (what agents run)
 uv run voxello config init|path|show
 uv run voxello install claude [--yes] [--stop-hook] [--claude-dir DIR]   # skill + hook into ~/.claude, offer settings.json entries
@@ -123,6 +128,21 @@ Layers, top to bottom, each depending only on the ones below:
   and each upload in their own `asyncio.run`; with `--all` every accepted clip is cloned
   before the next register starts. Accepted clips stay in `storage.recordings_dir`, which
   `Settings` keeps apart from the temp and cache dirs.
+- `dialogue/` (milestone 8, `docs/decisions/0003-dialogue-production.md`) is CLI-only, never
+  MCP, and has no LLM: the agent annotates files. `segment.py` is pure: paragraphs, quotes
+  (`«»`, `“”`, `""`, dash paragraphs; a quote opens speech only at a paragraph or sentence
+  start, after `:` or after `,` once a quote closed), headings, breaks, and narration grouped
+  by whole sentences into balanced segments of at most `max_chars`; ids `p003.2`; `text` is
+  always a verbatim slice. `script.py` holds the `script.yaml` model, `apply_annotations`
+  (all-or-nothing by id, `text` immutable, `register` aliased to `register_` because
+  `BaseModel.register` exists) and `check` (source hash, rebuild modulo whitespace, speakers,
+  tags only from `ALLOWED_TAGS` and at the line start, voices). `cast.py` is `cast.yaml`
+  and `resolve_line_voice` (register → character voice; design names via
+  `speech.voice_designs`). `takes.py`: `LineRequest`, `fingerprint` (includes
+  `guidance_scale`, not the server URL) and the `state.json` models; a take is current when
+  its fingerprint matches the present inputs with its own seed. `project.py` owns the
+  directory and atomic writes; `render.py` synthesizes lines without a current take and
+  saves state after each; `commands.py` is the argparse side, wired from `cli.py`.
 - `notifications/desktop.py` picks `terminal-notifier`, `osascript`, `notify-send` or PowerShell.
   On Windows the toast needs Windows PowerShell 5.1 (`powershell`); `pwsh` is a playback-only
   fallback (`playback/backends.py`) because the WinRT projection is unavailable in PowerShell 7.

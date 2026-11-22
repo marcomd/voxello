@@ -291,9 +291,9 @@ A dialogue project is a directory:
 chapter1/
   source.txt     # copy of the input, never modified
   cast.yaml      # written by the agent with the user: characters, voices, registers, pauses
-  script.yaml    # segments: id, kind, text, speaker, register, tts_text, tags, speed, attribution
+  script.yaml    # segments: id, kind, text, speaker, register, tts_text, speed, attribution, skip
   state.json     # machine-owned: takes per line and the approved fingerprint
-  takes/<id>/<fingerprint>.wav
+  takes/<id>/<fingerprint[:16]>.wav
   render/        # final.wav, timeline.json, final.srt
 ```
 
@@ -303,7 +303,7 @@ language: it
 narrator: narratore
 attributions: keep          # keep | drop narration segments flagged as "disse Marco"
 generation: {num_step: 16, seed: 1}
-pauses_ms: {same_speaker: 250, speaker_change: 450, paragraph: 700}
+pauses_ms: {same_speaker: 250, speaker_change: 450, paragraph: 700, break: 1500}
 characters:
   narratore: {voice: clone:narratore}
   marco:
@@ -311,6 +311,11 @@ characters:
     registers: {whisper: clone:marco-whisper, sad: clone:marco-sad}
   francesca: {voice: clone:francesca}        # registers can be recorded later
 ```
+
+A character (and a register, written as a bare voice or `{instructions: ...}`) has exactly
+one of `voice` (server voice, `clone:<id>` or a `speech.voice_designs` name) or
+`instructions`; `speed` per character is optional. `generation.speed: null` leaves speed to
+`config.yaml`.
 
 ### 8.1 Per-request generation options — done
 
@@ -346,7 +351,7 @@ loop with scripted input and a fake recorder, duration warnings, profile naming;
 integration test that records nothing but runs `prepare_reference` on a fixture through the
 real ffmpeg.
 
-### 8.3 Segmentation and annotation
+### 8.3 Segmentation and annotation — done
 
 `dialogue/segment.py` (pure): paragraphs split on blank lines; quoted speech in `«»`, `“”`,
 `""` and dash dialogue (`—`/`–` at paragraph start, closing dash before an attribution);
@@ -365,7 +370,30 @@ Acceptance: the three texts in `tmp/` segment as a person would read them, inclu
 segmenter cases per quote style, the rebuild invariant as a property over the fixtures, merge
 and validation errors with ids in the messages.
 
-### 8.4 Render and takes
+As built (details settled before implementation):
+
+- Segment kinds `narration`, `speech`, `heading` (a paragraph starting with `#`, read by the
+  narrator without the marks) and `break` (`---`, `***`, `* * *`: a `pauses_ms.break` silence).
+- A quote opens speech only at a paragraph start, after a sentence end (also after a closing
+  quote: `«Bellissimo.» «Vero.»`), after `:`, or after `,` once a quote has closed in the
+  paragraph (the inciso); `la chiamava «tesoro»` stays narration. Only the outermost quotes
+  count; punctuation right after a closing quote stays with the speech (`«Sono
+  piccolissimi»,`); apostrophes are never quotes. An unclosed quote runs to the paragraph end
+  with a warning (the multi-paragraph convention).
+- Narration and long speech are grouped by whole sentences into the fewest segments of at
+  most `max_chars` (300, `init --max-chars`, stored in `script.yaml`), balanced in length; a
+  single sentence is never cut (warning from 500 characters). Ids `p003.2`, the paragraph
+  number zero-padded to 3 digits (4 past 999 paragraphs).
+- Tags are written in `tts_text` only (no separate field): unknown tags are errors, allowed
+  tags not at the line start are warnings. A `skip` flag silences a segment (a scene title's
+  point-of-view marker, a note). `script.yaml` omits default values; `register` is an alias
+  of the Python field `register_`.
+- `check` also verifies `source_sha256` and works without `cast.yaml` (structure only), so
+  annotation can start before the cast interview. `dialogue segments --pending` lists speech
+  without a speaker. Five texts in `tmp/` are the manual acceptance set (all rebuild, no
+  warnings).
+
+### 8.4 Render and takes — done
 
 `dialogue/takes.py`: the fingerprint (SHA-256 of tts_text, resolved voice or instructions,
 language, speed, num_step, seed), the take store under `takes/` and `state.json` written
@@ -378,6 +406,16 @@ together with a voice. `attributions: drop` skips flagged narration.
 Acceptance: a second render with no edits calls the provider zero times; editing one
 `tts_text` re-renders one line and clears its approval. Tests with `FakeProvider`, including
 cancellation mid-render leaving no partial WAV and a provider error reported with the line id.
+
+As built: the fingerprint also covers `guidance_scale` from `config.yaml` (it changes the
+audio but is not a per-request option); the server URL is left out so takes survive a server
+move. Values resolve line → character → `cast.generation` → `config.yaml` and are always sent
+explicitly. `state.json` is `{version, lines: {id: {approved, takes: [{fingerprint, seed,
+duration_ms, created}]}}}`; a take is current when its fingerprint matches the line's present
+inputs with the take's own seed, so a take picked in review (another seed) stays current. Takes
+are named by the first 16 hex digits of the fingerprint; older takes are kept. Render refuses
+a project `check` rejects and saves `state.json` after every line. First real run (example2,
+22 lines, omnivoice-server on Apple silicon): 25 s.
 
 ### 8.5 Review loop
 
@@ -434,8 +472,8 @@ the speaker's consent.
 | 6 | Milestone 4 | Done: retry, `doctor --synth`, Windows CI leg and checklist, gated release |
 | 7 | Milestone 6 | Done: cloned voices on the server, voice design by attributes or by name |
 | 7b | Milestone 7 | Done: notification modes and a voice per kind of message, Codex hook |
-| 8 | 8.1, 8.2 | Per-request seed/speed; guided recording, useful on its own for better clones |
-| 9 | 8.3, 8.4 | Segments, annotation and reproducible takes: a dialogue renders end to end |
+| 8 | 8.1, 8.2 | Done: per-request seed/speed; guided recording, useful on its own for better clones |
+| 9 | 8.3, 8.4 | Done: segments, annotation and reproducible takes; a dialogue renders end to end |
 | 10 | 8.5, 8.6, 8.7 | Review, export and the skill that drives it |
 | 11 | Milestone 5 | On demand |
 
