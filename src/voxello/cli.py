@@ -4,7 +4,8 @@
 subcommands are for humans: ``doctor`` checks the setup, ``speak`` does a full
 round trip without an agent, ``config`` manages the config file, ``cache`` inspects
 and pre-fills the audio cache, ``voice`` manages cloned voices and lists voice designs,
-``install claude`` / ``install codex`` set up the agent skill and hooks, and
+``dialogue`` turns a text into a multi-voice audio dialogue, ``install claude`` /
+``install codex`` set up the agent skill and hooks, and
 ``hook notification`` / ``hook stop`` are what those hooks run.
 """
 
@@ -307,6 +308,10 @@ def build_parser() -> argparse.ArgumentParser:
     config_sub.add_parser("path", help="Print the resolved config path")
     config_sub.add_parser("show", help="Print the effective configuration")
 
+    from voxello.dialogue import commands as dialogue_commands
+
+    dialogue_commands.add_parser(sub)
+
     install_parser = sub.add_parser("install", help="Install Voxello integrations into other tools")
     install_sub = install_parser.add_subparsers(dest="install_command", required=True)
     claude = install_sub.add_parser(
@@ -405,6 +410,10 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(cmd_voice(_load(args), args))
         if command == "install":
             return cmd_install(args)
+        if command == "dialogue":
+            from voxello.dialogue import commands as dialogue_commands
+
+            return dialogue_commands.run(_load(args), args)
     except VoxelloError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

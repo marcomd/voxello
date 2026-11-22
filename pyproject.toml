@@ -96,6 +96,8 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "ASYNC", "S", "N", "RUF"]
 ignore = ["S101", "S603", "S607"]
+# Italian typography the dialogue segmenter parses on purpose (dash dialogue, apostrophes).
+allowed-confusables = ["–", "’"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S", "ASYNC", "E501"]

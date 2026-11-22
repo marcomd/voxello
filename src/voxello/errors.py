@@ -20,6 +20,7 @@ VOICE_CLONING_UNSUPPORTED = "voice_cloning_unsupported"  # server has no /v1/voi
 INVALID_REFERENCE_AUDIO = "invalid_reference_audio"  # unusable reference audio for cloning
 RECORDER_UNAVAILABLE = "recorder_unavailable"  # roadmap 8.2: no ffmpeg, platform or terminal
 RECORDING_FAILED = "recording_failed"  # the microphone capture or its cleanup failed
+INVALID_SCRIPT = "invalid_script"  # roadmap 8.3: a dialogue script, cast or annotation is invalid
 TTS_PROVIDER_UNAVAILABLE = "tts_provider_unavailable"
 TTS_PROVIDER_UNAUTHORIZED = "tts_provider_unauthorized"
 TTS_PROVIDER_ERROR = "tts_provider_error"

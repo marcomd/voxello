@@ -20,6 +20,15 @@ change the MCP tool signatures or the configuration layout.
   new `storage.recordings_dir` unless `--no-keep`. macOS and Linux; needs `ffmpeg`.
   `voxello doctor` prints a `Recorder:` line. New error codes `recorder_unavailable` and
   `recording_failed`.
+- `voxello dialogue` (roadmap 8.3-8.4) turns a text into a multi-voice dialogue project:
+  `init` splits the source deterministically into segments (`«»`, `“”`, `""` and dash
+  dialogue, narration grouped by sentences up to 300 characters, headings and scene breaks),
+  `segments`/`annotate` let an agent label speakers, registers, `tts_text` and attribution
+  flags by id (all-or-nothing, `text` never changes), `check` proves the segments rebuild the
+  source and validates tags and the cast, `show` and `stats` print a screenplay view and
+  lines per speaker, and `render` synthesizes one reproducible take per line (fingerprint of
+  text, voice, language, speed, num_step, seed and guidance_scale), resumably and only for
+  lines that changed. New error code `invalid_script`.
 - The TTS provider accepts per-request `seed`, `speed` and `num_step`
   (`SynthesisOptions`): the same seed reproduces the same audio. `speak` and `notify` do not
   use them yet, so their requests and cache keys are unchanged.
