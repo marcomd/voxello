@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -126,7 +127,15 @@ async def test_format_shows_the_numbers_and_the_next_command(project: Project) -
     assert "Cast       3 characters: narratore, bruno, anna" in text
     assert "Check      OK" in text
     assert "Takes      4/4 lines rendered, 0 approved" in text
-    assert f"Next       voxello dialogue review -p {project.root} --pending" in text
+    next_line = next(line for line in text.splitlines() if line.startswith("Next"))
+    assert shlex.split(next_line.removeprefix("Next")) == [
+        "voxello",
+        "dialogue",
+        "review",
+        "-p",
+        str(project.root),
+        "--pending",
+    ]
     assert "your own terminal" in text
 
 

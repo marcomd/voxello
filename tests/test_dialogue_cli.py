@@ -751,4 +751,12 @@ def test_status_prints_the_next_command(
     assert run(cfg, project, "status") == 0
     out = capsys.readouterr().out
     assert "Segments   5 (2 speech, 2 without a speaker)" in out
-    assert f"Next       voxello dialogue segments -p {project} --pending" in out
+    next_line = next(line for line in out.splitlines() if line.startswith("Next"))
+    assert shlex.split(next_line.removeprefix("Next")) == [
+        "voxello",
+        "dialogue",
+        "segments",
+        "-p",
+        str(project),
+        "--pending",
+    ]
