@@ -54,7 +54,7 @@ class Character(VoiceSpec):
     @field_validator("registers", mode="before")
     @classmethod
     def _shorthand(cls, value: Any) -> Any:
-        # `whisper: clone:marco-whisper` is short for `whisper: {voice: clone:marco-whisper}`
+        # `whisper: clone:bruno-whisper` is short for `whisper: {voice: clone:bruno-whisper}`
         if isinstance(value, dict):
             return {k: {"voice": v} if isinstance(v, str) else v for k, v in value.items()}
         return value

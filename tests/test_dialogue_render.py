@@ -22,15 +22,15 @@ from voxello.errors import (
 )
 from voxello.tts.base import SynthesisOptions
 
-SOURCE = """Francesca cercò i suoi occhi.
+SOURCE = """Anna aprì la finestra.
 
-«Metto il telefono in carica.» disse Marco.
+«Porto fuori il cane.» disse Bruno.
 
-«Nello studio?» domandò Francesca.
+«Fino al parco?» domandò Anna.
 
 ---
 
-#### Scena 2 · Marco
+#### Scena 2 · Bruno
 """
 
 CAST: dict[str, Any] = {
@@ -39,15 +39,15 @@ CAST: dict[str, Any] = {
     "generation": {"seed": 7, "num_step": 16},
     "characters": {
         "narratore": {"voice": "onyx"},
-        "marco": {"voice": "clone:marco", "registers": {"whisper": "clone:marco-whisper"}},
-        "francesca": {"instructions": "female, young adult"},
+        "bruno": {"voice": "clone:bruno", "registers": {"whisper": "clone:bruno-whisper"}},
+        "anna": {"instructions": "female, young adult"},
     },
 }
 
 ANNOTATIONS = {
-    "p002.1": {"speaker": "marco", "register": "whisper"},
+    "p002.1": {"speaker": "bruno", "register": "whisper"},
     "p002.2": {"attribution": True},
-    "p003.1": {"speaker": "francesca", "speed": 0.9},
+    "p003.1": {"speaker": "anna", "speed": 0.9},
     "p005.1": {"tts_text": "Scena 2"},
 }
 
@@ -65,7 +65,7 @@ def project(tmp_path: Path) -> Project:
 def request(**overrides: Any) -> LineRequest:
     values: dict[str, Any] = {
         "tts_text": "Ciao.",
-        "voice": "clone:marco",
+        "voice": "clone:bruno",
         "instructions": None,
         "language": "it",
         "speed": None,
@@ -86,7 +86,7 @@ def test_fingerprint_is_stable_and_covers_every_input() -> None:
     assert len(base) == 64
     variants = [
         {"tts_text": "Ciao!"},
-        {"voice": "clone:marco-whisper"},
+        {"voice": "clone:bruno-whisper"},
         {"voice": None, "instructions": "male"},
         {"language": "en"},
         {"speed": 0.9},
@@ -159,8 +159,8 @@ def test_line_requests_resolve_voices_and_values(project: Project) -> None:
         line.segment_id: line.request
         for line in project.lines(LineDefaults(speed=1.1, guidance_scale=2.0))
     }
-    assert lines["p002.1"].voice == "clone:marco-whisper"
-    assert lines["p002.1"].tts_text == "Metto il telefono in carica."
+    assert lines["p002.1"].voice == "clone:bruno-whisper"
+    assert lines["p002.1"].tts_text == "Porto fuori il cane."
     assert lines["p002.1"].speed == 1.1  # cast leaves speed to config.yaml
     assert lines["p003.1"].instructions == "female, young adult"
     assert lines["p003.1"].voice is None
@@ -202,8 +202,8 @@ async def test_render_synthesizes_every_spoken_line_once(project: Project) -> No
     assert summary.rendered == 6
     assert summary.reused == 0
     assert [c[0] for c in provider.calls][:2] == [
-        "Francesca cercò i suoi occhi.",
-        "Metto il telefono in carica.",
+        "Anna aprì la finestra.",
+        "Porto fuori il cane.",
     ]
     assert provider.options[0] == SynthesisOptions(seed=7, speed=None, num_step=16)
     assert provider.instructions[3] == "female, young adult"
@@ -240,11 +240,11 @@ async def test_editing_one_line_rerenders_it_and_clears_its_approval(project: Pr
     project.save_state(state)
     old = state.lines["p002.1"].takes[0].fingerprint
 
-    project.annotate({"p002.1": {"tts_text": "[sigh] Metto il telefono in carica."}})
+    project.annotate({"p002.1": {"tts_text": "[sigh] Porto fuori il cane."}})
     provider = FakeProvider()
     summary = await render(project, provider)
 
-    assert [c[0] for c in provider.calls] == ["[sigh] Metto il telefono in carica."]
+    assert [c[0] for c in provider.calls] == ["[sigh] Porto fuori il cane."]
     assert summary.rendered == 1
     state = project.load_state()
     assert state.lines["p002.1"].approved is None

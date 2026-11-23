@@ -61,6 +61,17 @@ def capture_input(
     )
 
 
+def _find_ffmpeg(which: Callable[[str], str | None], purpose: str) -> str:
+    ffmpeg = which("ffmpeg")
+    if ffmpeg is None:
+        raise VoxelloError(
+            RECORDER_UNAVAILABLE,
+            f"{purpose} needs ffmpeg on the PATH (macOS: `brew install ffmpeg`; "
+            "Debian/Ubuntu: `apt install ffmpeg`; Windows: `winget install ffmpeg`).",
+        )
+    return ffmpeg
+
+
 def detect_recorder(
     *,
     device: str | None = None,
@@ -69,14 +80,12 @@ def detect_recorder(
 ) -> FfmpegRecorder:
     plat = platform or sys.platform
     args = capture_input(plat, device, which)
-    ffmpeg = which("ffmpeg")
-    if ffmpeg is None:
-        raise VoxelloError(
-            RECORDER_UNAVAILABLE,
-            "Recording needs ffmpeg on the PATH (macOS: `brew install ffmpeg`; "
-            "Debian/Ubuntu: `apt install ffmpeg`).",
-        )
-    return FfmpegRecorder(ffmpeg, args, plat)
+    return FfmpegRecorder(_find_ffmpeg(which, "Recording"), args, plat)
+
+
+def detect_cleaner(*, which: Callable[[str], str | None] = shutil.which) -> FfmpegCleaner:
+    """Cleanup only (``voice clone --prepare``): any platform, no microphone involved."""
+    return FfmpegCleaner(_find_ffmpeg(which, "Preparing a recording"))
 
 
 class FfmpegRecording:
@@ -113,7 +122,73 @@ class FfmpegRecording:
         self._finish()
 
 
-class FfmpegRecorder:
+class FfmpegCleaner:
+    """Turns any recording ffmpeg can read into a reference clip, optionally a window of it."""
+
+    def __init__(self, ffmpeg: str, *, run: Run = subprocess.run) -> None:
+        self.ffmpeg = ffmpeg
+        self._run = run
+
+    def prepare_command(
+        self,
+        raw: Path,
+        output: Path,
+        *,
+        start: float | None = None,
+        duration: float | None = None,
+    ) -> list[str]:
+        window: list[str] = []
+        if start is not None:
+            window += ["-ss", f"{start:g}"]
+        if duration is not None:
+            window += ["-t", f"{duration:g}"]
+        return [
+            self.ffmpeg,
+            *_QUIET,
+            "-nostdin",
+            *window,
+            "-i",
+            str(raw),
+            "-af",
+            CLEANUP_FILTER,
+            "-ac",
+            "1",
+            "-ar",
+            str(SAMPLE_RATE),
+            "-c:a",
+            "pcm_s16le",
+            str(output),
+        ]
+
+    def prepare(
+        self,
+        raw: Path,
+        output: Path,
+        *,
+        start: float | None = None,
+        duration: float | None = None,
+    ) -> None:
+        """Clean ``raw`` (from ``start`` s, for ``duration`` s) into a reference clip."""
+        try:
+            result = self._run(
+                self.prepare_command(raw, output, start=start, duration=duration),
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                check=False,
+            )
+        except OSError as exc:
+            raise VoxelloError(
+                RECORDER_UNAVAILABLE, f"Could not run ffmpeg ({self.ffmpeg}): {exc}"
+            ) from exc
+        if result.returncode != 0:
+            detail = result.stderr.decode(errors="replace").strip().splitlines()[-3:]
+            raise VoxelloError(
+                RECORDING_FAILED,
+                f"ffmpeg could not clean up the recording: {' / '.join(detail) or 'no output'}",
+            )
+
+
+class FfmpegRecorder(FfmpegCleaner):
     def __init__(
         self,
         ffmpeg: str,
@@ -123,11 +198,10 @@ class FfmpegRecorder:
         popen: Popen = subprocess.Popen,
         run: Run = subprocess.run,
     ) -> None:
-        self.ffmpeg = ffmpeg
+        super().__init__(ffmpeg, run=run)
         self.input_args = input_args
         self.platform = platform
         self._popen = popen
-        self._run = run
 
     def describe(self) -> str:
         return f"ffmpeg ({self.input_args[1]} {self.input_args[3]})"
@@ -147,24 +221,6 @@ class FfmpegRecorder:
             str(output),
         ]
 
-    def prepare_command(self, raw: Path, output: Path) -> list[str]:
-        return [
-            self.ffmpeg,
-            *_QUIET,
-            "-nostdin",
-            "-i",
-            str(raw),
-            "-af",
-            CLEANUP_FILTER,
-            "-ac",
-            "1",
-            "-ar",
-            str(SAMPLE_RATE),
-            "-c:a",
-            "pcm_s16le",
-            str(output),
-        ]
-
     def start(self, output: Path, max_seconds: float) -> FfmpegRecording:
         try:
             process = self._popen(
@@ -178,23 +234,3 @@ class FfmpegRecorder:
                 RECORDER_UNAVAILABLE, f"Could not start ffmpeg ({self.ffmpeg}): {exc}"
             ) from exc
         return FfmpegRecording(process, self.platform)
-
-    def prepare(self, raw: Path, output: Path) -> None:
-        """Clean ``raw`` into a reference clip at ``output``."""
-        try:
-            result = self._run(
-                self.prepare_command(raw, output),
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                check=False,
-            )
-        except OSError as exc:
-            raise VoxelloError(
-                RECORDER_UNAVAILABLE, f"Could not run ffmpeg ({self.ffmpeg}): {exc}"
-            ) from exc
-        if result.returncode != 0:
-            detail = result.stderr.decode(errors="replace").strip().splitlines()[-3:]
-            raise VoxelloError(
-                RECORDING_FAILED,
-                f"ffmpeg could not clean up the recording: {' / '.join(detail) or 'no output'}",
-            )

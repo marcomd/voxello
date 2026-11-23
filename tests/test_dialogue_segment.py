@@ -24,71 +24,70 @@ def squash(text: str) -> str:
     ("source", "expected"),
     [
         pytest.param(
-            "«Piove?» gli domandò, senza muoversi.",
+            "«Nevica?» gli chiese, senza alzarsi.",
             [
-                ("p001.1", "speech", "«Piove?»"),
-                ("p001.2", "narration", "gli domandò, senza muoversi."),
+                ("p001.1", "speech", "«Nevica?»"),
+                ("p001.2", "narration", "gli chiese, senza alzarsi."),
             ],
             id="guillemets-question-then-attribution",
         ),
         pytest.param(
-            "“Piove?” gli domandò.",
-            [("p001.1", "speech", "“Piove?”"), ("p001.2", "narration", "gli domandò.")],
+            "“Nevica?” gli domandò.",
+            [("p001.1", "speech", "“Nevica?”"), ("p001.2", "narration", "gli domandò.")],
             id="curly-quotes",
         ),
         pytest.param(
-            '"Piove?" gli domandò.',
-            [("p001.1", "speech", '"Piove?"'), ("p001.2", "narration", "gli domandò.")],
+            '"Nevica?" gli domandò.',
+            [("p001.1", "speech", '"Nevica?"'), ("p001.2", "narration", "gli domandò.")],
             id="straight-quotes",
         ),
         pytest.param(
-            "«Metto il telefono in carica. È quasi spento.» disse Marco.",
+            "«Porto fuori il cane. È già tardi.» disse Bruno.",
             [
-                ("p001.1", "speech", "«Metto il telefono in carica. È quasi spento.»"),
-                ("p001.2", "narration", "disse Marco."),
+                ("p001.1", "speech", "«Porto fuori il cane. È già tardi.»"),
+                ("p001.2", "narration", "disse Bruno."),
             ],
             id="attribution-without-comma",
         ),
         pytest.param(
-            "«Sono piccolissimi», disse lei, vedendolo guardare.",
+            "«Sono nuovi», disse lei, girandosi.",
             [
-                ("p001.1", "speech", "«Sono piccolissimi»,"),
-                ("p001.2", "narration", "disse lei, vedendolo guardare."),
+                ("p001.1", "speech", "«Sono nuovi»,"),
+                ("p001.2", "narration", "disse lei, girandosi."),
             ],
             id="comma-goes-with-the-quote",
         ),
         pytest.param(
-            "«Se andiamo possiamo riportarle», disse, indicando la busta. «Devo prendere lo"
-            " shampoo.»",
+            "«Se passi in centro restituiscili», disse, indicando i libri. «Scadono domani.»",
             [
-                ("p001.1", "speech", "«Se andiamo possiamo riportarle»,"),
-                ("p001.2", "narration", "disse, indicando la busta."),
-                ("p001.3", "speech", "«Devo prendere lo shampoo.»"),
+                ("p001.1", "speech", "«Se passi in centro restituiscili»,"),
+                ("p001.2", "narration", "disse, indicando i libri."),
+                ("p001.3", "speech", "«Scadono domani.»"),
             ],
             id="second-quote-after-sentence-end",
         ),
         pytest.param(
-            "«Pensavo a noi», aggiunse lei, «l'altra sera.»",
+            "«Ci vediamo», aggiunse lei, «verso le otto.»",
             [
-                ("p001.1", "speech", "«Pensavo a noi»,"),
+                ("p001.1", "speech", "«Ci vediamo»,"),
                 ("p001.2", "narration", "aggiunse lei,"),
-                ("p001.3", "speech", "«l'altra sera.»"),
+                ("p001.3", "speech", "«verso le otto.»"),
             ],
             id="inciso",
         ),
         pytest.param(
-            "Lei ne prese un pezzo. «Tu hai già finito?»",
+            "Lei chiuse il libro. «Lo hai già letto?»",
             [
-                ("p001.1", "narration", "Lei ne prese un pezzo."),
-                ("p001.2", "speech", "«Tu hai già finito?»"),
+                ("p001.1", "narration", "Lei chiuse il libro."),
+                ("p001.2", "speech", "«Lo hai già letto?»"),
             ],
             id="narration-then-quote",
         ),
         pytest.param(
-            "«Bellissimo.» «Vero.» rispose lei.",
+            "«Pronto.» «Arrivo.» rispose lei.",
             [
-                ("p001.1", "speech", "«Bellissimo.»"),
-                ("p001.2", "speech", "«Vero.»"),
+                ("p001.1", "speech", "«Pronto.»"),
+                ("p001.2", "speech", "«Arrivo.»"),
                 ("p001.3", "narration", "rispose lei."),
             ],
             id="two-quotes-in-a-row",
@@ -115,8 +114,8 @@ def squash(text: str) -> str:
             id="nested-quotes-belong-to-the-outer-one",
         ),
         pytest.param(
-            "L’accompagnava sempre. L'ultima volta no.",
-            [("p001.1", "narration", "L’accompagnava sempre. L'ultima volta no.")],
+            "L’aspettava sempre. Quell'anno no.",
+            [("p001.1", "narration", "L’aspettava sempre. Quell'anno no.")],
             id="apostrophes-are-not-quotes",
         ),
     ],
@@ -129,27 +128,27 @@ def test_quotes(source: str, expected: list[tuple[str, str, str]]) -> None:
     ("source", "expected"),
     [
         pytest.param(
-            "— Piove? — domandò lei. — Per ora no.",
+            "— Nevica? — domandò lei. — Non ancora.",
             [
-                ("p001.1", "speech", "— Piove? —"),
+                ("p001.1", "speech", "— Nevica? —"),
                 ("p001.2", "narration", "domandò lei."),
-                ("p001.3", "speech", "— Per ora no."),
+                ("p001.3", "speech", "— Non ancora."),
             ],
             id="em-dash",
         ),
         pytest.param(
-            "– Piove?",
-            [("p001.1", "speech", "– Piove?")],
+            "– Nevica?",
+            [("p001.1", "speech", "– Nevica?")],
             id="en-dash-whole-paragraph",
         ),
         pytest.param(
-            "—Piove? —domandò lei.",
-            [("p001.1", "speech", "—Piove? —"), ("p001.2", "narration", "domandò lei.")],
+            "—Nevica? —domandò lei.",
+            [("p001.1", "speech", "—Nevica? —"), ("p001.2", "narration", "domandò lei.")],
             id="dash-without-spaces",
         ),
         pytest.param(
-            "Scena 2 — Davanti allo specchio.",
-            [("p001.1", "narration", "Scena 2 — Davanti allo specchio.")],
+            "Capitolo 2 — In cucina.",
+            [("p001.1", "narration", "Capitolo 2 — In cucina.")],
             id="dash-inside-narration-is-not-dialogue",
         ),
     ],
@@ -178,11 +177,11 @@ def test_odd_straight_quotes_warn() -> None:
 
 
 def test_paragraphs_headings_and_breaks() -> None:
-    source = "Primo.\n\n---\n\n#### Scena 2 — Davanti allo specchio · Marco\n\n\n\nUltimo.  \n"
+    source = "Primo.\n\n---\n\n#### Scena 2 — In cucina · Bruno\n\n\n\nUltimo.  \n"
     assert texts(segment_text(source).segments) == [
         ("p001.1", "narration", "Primo."),
         ("p002.1", "break", "---"),
-        ("p003.1", "heading", "#### Scena 2 — Davanti allo specchio · Marco"),
+        ("p003.1", "heading", "#### Scena 2 — In cucina · Bruno"),
         ("p004.1", "narration", "Ultimo."),
     ]
 
@@ -270,23 +269,23 @@ def test_sentence_boundaries(source: str, count: int) -> None:
 
 # --- invariants -----------------------------------------------------------------------------
 
-FIXTURE = """Francesca cercò i suoi occhi. Li trovò già su di sé.
+FIXTURE = """Anna aprì la finestra. Entrava aria fresca.
 
-«Metto un momento il telefono in carica. È quasi spento.» disse Marco.
+«Porto fuori il cane un momento. È già tardi.» disse Bruno.
 
-«Nello studio?» domandò Francesca.
+«Fino al parco?» domandò Anna.
 
-«Se andiamo possiamo riportarle», disse, indicando la busta. «Devo prendere lo shampoo.»
+«Se passi in centro restituiscili», disse, indicando i libri. «Scadono domani.»
 
-— Piove? — domandò lei. — Per ora no.
+— Nevica? — domandò lei. — Non ancora.
 
 ---
 
-#### Scena 2 — Davanti allo specchio · Marco
+#### Scena 2 — In cucina · Bruno
 
-La chiamava «tesoro» davanti a tutti; “sempre”, diceva. Lei ne prese un pezzo. «Tu?»
+La chiamava «tesoro» davanti a tutti; “sempre”, diceva. Lei chiuse il libro. «Tu?»
 
-«Bellissimo.» «Vero.» rispose lei.
+«Pronto.» «Arrivo.» rispose lei.
 """
 
 
@@ -307,16 +306,16 @@ def test_segmentation_is_deterministic_and_prefix_stable() -> None:
 @pytest.mark.parametrize(
     ("kind", "text", "expected"),
     [
-        ("speech", "«Sono piccolissimi»,", "Sono piccolissimi,"),
-        ("speech", "«Piove?»", "Piove?"),
-        ("speech", "“Piove?”", "Piove?"),
-        ("speech", '"Piove?"', "Piove?"),
-        ("speech", "— Piove? —", "Piove?"),
-        ("speech", "— Per ora no.", "Per ora no."),
+        ("speech", "«Sono nuovi»,", "Sono nuovi,"),
+        ("speech", "«Nevica?»", "Nevica?"),
+        ("speech", "“Nevica?”", "Nevica?"),
+        ("speech", '"Nevica?"', "Nevica?"),
+        ("speech", "— Nevica? —", "Nevica?"),
+        ("speech", "— Non ancora.", "Non ancora."),
         ("speech", "«Inizio di un discorso", "Inizio di un discorso"),
         ("speech", "«Ha detto “mai più”.»", "Ha detto “mai più”."),
         ("narration", "disse lei.", "disse lei."),
-        ("heading", "#### Scena 2 — Davanti", "Scena 2 — Davanti"),
+        ("heading", "#### Scena 2 — In cucina", "Scena 2 — In cucina"),
         ("break", "---", ""),
     ],
 )

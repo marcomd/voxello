@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import shlex
+import sys
 from pathlib import Path
 
 import pytest
@@ -13,11 +15,11 @@ from voxello.dialogue import commands
 
 from .conftest import FakeProvider
 
-SOURCE = """Francesca cercò i suoi occhi.
+SOURCE = """Anna aprì la finestra.
 
-«Metto il telefono in carica.» disse Marco.
+«Porto fuori il cane.» disse Bruno.
 
-«Nello studio?» domandò Francesca.
+«Fino al parco?» domandò Anna.
 """
 
 CAST = {
@@ -25,8 +27,8 @@ CAST = {
     "narrator": "narratore",
     "characters": {
         "narratore": {"voice": "onyx"},
-        "marco": {"voice": "clone:marco"},
-        "francesca": {"voice": "clone:francesca"},
+        "bruno": {"voice": "clone:bruno"},
+        "anna": {"voice": "clone:anna"},
     },
 }
 
@@ -94,23 +96,23 @@ def test_commands_outside_a_project_fail(
 def test_segments_prints_a_chunk_with_annotations(
     project: Path, cfg: list[str], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert annotate(cfg, project, {"p002.1": {"speaker": "marco"}}) == 0
+    assert annotate(cfg, project, {"p002.1": {"speaker": "bruno"}}) == 0
     assert "Annotated 1 segment: p002.1" in capsys.readouterr().out
     assert run(cfg, project, "segments", "--from", "p002.1", "--count", "2") == 0
     assert capsys.readouterr().out.splitlines() == [
-        "p002.1 speech {speaker: marco} «Metto il telefono in carica.»",
-        "p002.2 narration disse Marco.",
+        "p002.1 speech {speaker: bruno} «Porto fuori il cane.»",
+        "p002.2 narration disse Bruno.",
     ]
 
 
 def test_segments_pending_lists_unassigned_speech(
     project: Path, cfg: list[str], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    annotate(cfg, project, {"p002.1": {"speaker": "marco"}})
+    annotate(cfg, project, {"p002.1": {"speaker": "bruno"}})
     capsys.readouterr()
     assert run(cfg, project, "segments", "--pending") == 0
     assert capsys.readouterr().out.splitlines() == [
-        "p003.1 speech «Nello studio?»",
+        "p003.1 speech «Fino al parco?»",
     ]
 
 
@@ -119,7 +121,7 @@ def test_annotate_from_stdin_and_rejection(
 ) -> None:
     import io
 
-    monkeypatch.setattr("sys.stdin", io.StringIO("p002.1: {speaker: marco}\n"))
+    monkeypatch.setattr("sys.stdin", io.StringIO("p002.1: {speaker: bruno}\n"))
     assert run(cfg, project, "annotate", "-") == 0
     assert annotate(cfg, project, {"p002.1": {"text": "altro"}}) == 1
     assert "p002.1: `text` cannot change" in capsys.readouterr().err
@@ -143,7 +145,7 @@ def test_check_reports_errors_then_passes(
     assert "error: p002.1: speech has no speaker" in out
     assert "warning: cast.yaml is missing" in out
 
-    annotate(cfg, project, {"p002.1": {"speaker": "marco"}, "p003.1": {"speaker": "francesca"}})
+    annotate(cfg, project, {"p002.1": {"speaker": "bruno"}, "p003.1": {"speaker": "anna"}})
     (project / "cast.yaml").write_text(yaml.safe_dump(CAST), encoding="utf-8")
     capsys.readouterr()
     assert run(cfg, project, "check") == 0
@@ -158,9 +160,9 @@ def test_show_is_a_screenplay(
         cfg,
         project,
         {
-            "p002.1": {"speaker": "marco", "register": "whisper"},
+            "p002.1": {"speaker": "bruno", "register": "whisper"},
             "p002.2": {"attribution": True},
-            "p003.1": {"speaker": "francesca", "tts_text": "[sigh] Nello studio?"},
+            "p003.1": {"speaker": "anna", "tts_text": "[sigh] Fino al parco?"},
             "p003.2": {"skip": True},
         },
     )
@@ -168,11 +170,11 @@ def test_show_is_a_screenplay(
     capsys.readouterr()
     assert run(cfg, project, "show") == 0
     lines = capsys.readouterr().out.splitlines()
-    assert lines[0].split(None, 2) == ["p001.1", "NARRATORE", "Francesca cercò i suoi occhi."]
-    assert "MARCO (whisper)" in lines[1]
+    assert lines[0].split(None, 2) == ["p001.1", "NARRATORE", "Anna aprì la finestra."]
+    assert "BRUNO (whisper)" in lines[1]
     assert "(attribution)" in lines[2]
-    assert lines[3].endswith("[sigh] Nello studio?")
-    assert lines[4] == "          text: «Nello studio?»"
+    assert lines[3].endswith("[sigh] Fino al parco?")
+    assert lines[4] == "          text: «Fino al parco?»"
     assert "(skip)" in lines[5]
 
 
@@ -188,11 +190,11 @@ def test_show_without_cast_marks_unassigned(
 def test_stats_counts_lines_and_characters(
     project: Path, cfg: list[str], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    annotate(cfg, project, {"p002.1": {"speaker": "marco"}})
+    annotate(cfg, project, {"p002.1": {"speaker": "bruno"}})
     capsys.readouterr()
     assert run(cfg, project, "stats") == 0
     out = capsys.readouterr().out
-    assert "marco" in out
+    assert "bruno" in out
     assert "(narration)" in out
     assert "unassigned speech: 1 line" in out
 
@@ -203,7 +205,7 @@ def test_render_uses_the_provider_and_reports_progress(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    annotate(cfg, project, {"p002.1": {"speaker": "marco"}, "p003.1": {"speaker": "francesca"}})
+    annotate(cfg, project, {"p002.1": {"speaker": "bruno"}, "p003.1": {"speaker": "anna"}})
     (project / "cast.yaml").write_text(yaml.safe_dump(CAST), encoding="utf-8")
     provider = FakeProvider()
     monkeypatch.setattr(commands, "make_provider", lambda _settings: provider)
@@ -229,3 +231,250 @@ def test_render_refuses_an_invalid_project(
     monkeypatch.setattr(commands, "make_provider", lambda _settings: FakeProvider())
     assert run(cfg, project, "render") == 1
     assert "cast.yaml" in capsys.readouterr().err
+
+
+# --- review (roadmap 8.5) ---------------------------------------------------------------------
+
+
+class Keys:
+    """A review terminal for the CLI tests: scripted keys, collected output."""
+
+    def __init__(self, keys: list[str]) -> None:
+        self.keys = keys
+        self.out: list[str] = []
+
+    def __enter__(self) -> Keys:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def say(self, text: str) -> None:
+        self.out.append(text)
+
+    async def key(self) -> str:
+        key = self.keys.pop(0)
+        if key == "SIGINT":
+            raise KeyboardInterrupt
+        return key
+
+    def edit(self, text: str) -> str | None:  # pragma: no cover - not used by these tests
+        return None
+
+
+@pytest.fixture
+def review_project(
+    project: Path,
+    cfg: list[str],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
+    from .conftest import FakePlayer
+
+    annotate(cfg, project, {"p002.1": {"speaker": "bruno"}, "p003.1": {"speaker": "anna"}})
+    (project / "cast.yaml").write_text(yaml.safe_dump(CAST), encoding="utf-8")
+    monkeypatch.setattr(commands, "make_provider", lambda _settings: FakeProvider())
+    monkeypatch.setattr(commands, "make_player", lambda _settings: FakePlayer())
+    monkeypatch.setattr(commands, "stdin_is_tty", lambda: True)
+    capsys.readouterr()
+    return project
+
+
+def test_review_needs_a_terminal(
+    project: Path,
+    cfg: list[str],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert run(cfg, project, "review") == 1
+    assert "interactive terminal" in capsys.readouterr().err
+
+
+def test_review_runs_a_session_and_prints_a_summary(
+    review_project: Path,
+    cfg: list[str],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keys = Keys(["enter", "q"])
+    monkeypatch.setattr(commands, "make_review_terminal", lambda _work: keys)
+    assert run(cfg, review_project, "review") == 0
+    out = capsys.readouterr().out
+    assert "Approved 1/5 lines" in out
+    resume = out.split("Resume with: ", 1)[1].strip()
+    assert shlex.split(resume) == ["voxello", "dialogue", "review", "-p", str(review_project)]
+    assert any(line.startswith("[1/5] p001.1") for line in keys.out)
+
+
+def test_review_flags_reach_the_session(
+    review_project: Path,
+    cfg: list[str],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keys = Keys(["q"])
+    monkeypatch.setattr(commands, "make_review_terminal", lambda _work: keys)
+    assert run(cfg, review_project, "review", "--from", "p003.1", "--pending", "--flagged") == 0
+    # FakeProvider takes are silent, so every line is flagged; --from picks p003.1 among them
+    assert keys.out[1].startswith("[4/5] p003.1")
+
+
+def test_review_finished(
+    review_project: Path,
+    cfg: list[str],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keys = Keys(["enter"] * 5)
+    monkeypatch.setattr(commands, "make_review_terminal", lambda _work: keys)
+    assert run(cfg, review_project, "review") == 0
+    assert "Review finished: approved 5/5 lines" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("key", ["ctrl-c", "SIGINT"])
+def test_review_interrupted(
+    review_project: Path,
+    cfg: list[str],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    key: str,
+) -> None:
+    keys = Keys(["n", key])
+    monkeypatch.setattr(commands, "make_review_terminal", lambda _work: keys)
+    assert run(cfg, review_project, "review") == 130
+    assert "Review saved at p002.1" in capsys.readouterr().out
+    state = json.loads((review_project / "state.json").read_text())
+    assert state["review"]["position"] == "p002.1"
+
+
+# --- the console terminal ------------------------------------------------------------------
+
+
+@pytest.fixture
+def pty_terminal(tmp_path: Path):  # type: ignore[no-untyped-def]
+    if sys.platform == "win32":
+        pytest.skip("POSIX pseudo-terminals are unavailable on Windows")
+    import os
+    import pty
+
+    master, slave = pty.openpty()
+    terminal = commands.ConsoleReviewTerminal(tmp_path, fd=slave)
+    try:
+        with terminal:
+            yield terminal, master
+    finally:
+        os.close(master)
+        os.close(slave)
+
+
+async def test_console_terminal_reads_single_keys(pty_terminal) -> None:  # type: ignore[no-untyped-def]
+    import os
+
+    terminal, master = pty_terminal
+    os.write(master, b"r")
+    assert await terminal.key() == "r"
+    os.write(master, b"\x1b[C")
+    assert await terminal.key() == "n"
+
+
+def test_console_terminal_edits_with_the_editor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import shlex
+    import sys
+
+    script = tmp_path / "editor.py"
+    script.write_text(
+        "import pathlib, sys\n"
+        "p = pathlib.Path(sys.argv[1])\n"
+        "p.write_text(p.read_text(encoding='utf-8').upper(), encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VISUAL", f"{shlex.quote(sys.executable)} {shlex.quote(str(script))}")
+    terminal = commands.ConsoleReviewTerminal(tmp_path, fd=None)
+    assert terminal.edit("ciao è") == "CIAO È\n"
+    monkeypatch.setenv("VISUAL", f"{shlex.quote(sys.executable)} -c 'raise SystemExit(3)'")
+    assert terminal.edit("ciao") is None
+    monkeypatch.setenv("VISUAL", "/nonexistent/editor")
+    assert terminal.edit("ciao") is None
+
+
+@pytest.mark.parametrize(
+    ("env", "platform", "expected"),
+    [
+        ({"VISUAL": "code -w", "EDITOR": "nano"}, "darwin", ["code", "-w"]),
+        ({"EDITOR": "nano"}, "linux", ["nano"]),
+        ({}, "darwin", ["vi"]),
+        ({}, "win32", ["notepad"]),
+    ],
+)
+def test_editor_command(env: dict[str, str], platform: str, expected: list[str]) -> None:
+    assert commands.editor_command(env, platform) == expected
+
+
+async def test_windows_keys_poll_msvcrt() -> None:
+    class FakeMsvcrt:
+        def __init__(self, chars: str) -> None:
+            self.chars = list(chars)
+            self.polls = 0
+
+        def kbhit(self) -> bool:
+            self.polls += 1
+            return self.polls > 1
+
+        def getwch(self) -> str:
+            return self.chars.pop(0)
+
+    assert await commands.windows_key(FakeMsvcrt("q"), interval=0) == "q"
+    assert await commands.windows_key(FakeMsvcrt("\xe0M"), interval=0) == "n"
+    assert await commands.windows_key(FakeMsvcrt("\r"), interval=0) == "enter"
+
+
+def test_make_player_uses_the_detected_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    from voxello.config import Settings
+    from voxello.playback import detect
+    from voxello.playback.backends import ALL_BACKENDS
+
+    monkeypatch.setattr(detect, "detect_backend", lambda _preferred: None)
+    assert commands.make_player(Settings()) is None
+    monkeypatch.setattr(detect, "detect_backend", lambda _preferred: ALL_BACKENDS["afplay"])
+    player = commands.make_player(Settings())
+    assert player is not None and player.name == "afplay"
+
+
+def test_make_review_terminal_reads_stdin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    class Stdin:
+        def fileno(self) -> int:
+            return 7
+
+    monkeypatch.setattr("sys.stdin", Stdin())
+    terminal = commands.make_review_terminal(tmp_path)
+    assert isinstance(terminal, commands.ConsoleReviewTerminal)
+    assert terminal.fd == (None if sys.platform == "win32" else 7)
+
+
+def test_console_terminal_restores_cbreak_after_the_editor(
+    pty_terminal,  # type: ignore[no-untyped-def]
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import termios
+
+    terminal, _master = pty_terminal
+    line_mode = termios.ICANON | termios.ECHO
+    assert termios.tcgetattr(terminal.fd)[3] & line_mode == 0
+    monkeypatch.setenv("VISUAL", "true")
+    assert terminal.edit("ciao") == "ciao\n"
+    # back in cbreak (macOS may add PENDIN to the local flags, so only these bits are compared)
+    assert termios.tcgetattr(terminal.fd)[3] & line_mode == 0
+    terminal.say("hello")
+    assert capsys.readouterr().out == "hello\n"
+
+
+async def test_console_terminal_waits_for_a_key(pty_terminal) -> None:  # type: ignore[no-untyped-def]
+    import asyncio
+    import os
+
+    terminal, master = pty_terminal
+    loop = asyncio.get_running_loop()
+    loop.call_later(0.1, os.write, master, b"\r")
+    assert await asyncio.wait_for(terminal.key(), 2) == "enter"

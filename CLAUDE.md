@@ -36,12 +36,14 @@ uv run voxello cache list|clear                   # audio cache: hash, size, cha
 uv run voxello cache warm --hook-phrases --language it|en   # or: cache warm FILE, cache warm -
 uv run voxello speak "text" -l en -i "female, young adult, high pitch"   # voice design
 uv run voxello voice list|clone NAME FILE [--ref-text T] [--yes]|update NAME|delete NAME
+uv run voxello voice clone NAME FILE --prepare [--start S] [--duration D]   # ffmpeg cleanup first
 uv run voxello voice record NAME [--all | --register whisper] [--text T] [--no-keep]  # guided, needs ffmpeg
 uv run voxello dialogue init chapter1.txt [DIR] [--max-chars 300]   # project dir + segments
 uv run voxello dialogue segments|show [-p DIR] [--from ID] [--count N] [--pending]
 uv run voxello dialogue annotate FILE|- [-p DIR]  # {id: {speaker, register, tts_text, ...}}
 uv run voxello dialogue check|stats [-p DIR]
 uv run voxello dialogue render [-p DIR] [--lines A-B] [--force]   # needs cast.yaml
+uv run voxello dialogue review [-p DIR] [--from ID] [--pending] [--flagged]   # single keys, needs a TTY
 uv run voxello serve                              # MCP server over stdio (what agents run)
 uv run voxello config init|path|show
 uv run voxello install claude [--yes] [--stop-hook] [--claude-dir DIR]   # skill + hook into ~/.claude, offer settings.json entries
@@ -124,6 +126,9 @@ Layers, top to bottom, each depending only on the ones below:
   pulse/alsa; Windows raises `recorder_unavailable`) and cleanup commands, stopping a capture
   by sending `q` on stdin; `session.py` is the record/listen/redo loop with an injected
   terminal, recorder and player (`Stop.SKIP` only when `can_skip`, i.e. `--all`).
+  `FfmpegCleaner` (base of `FfmpegRecorder`, `detect_cleaner` works on any platform) is
+  also behind `voice clone --prepare`, which can cut a window (`-ss`/`-t`) and keeps the
+  clip with a sidecar like `voice record`.
   `cli.cmd_voice_record` is synchronous (the keyboard drives it) and runs the profile check
   and each upload in their own `asyncio.run`; with `--all` every accepted clip is cloned
   before the next register starts. Accepted clips stay in `storage.recordings_dir`, which
@@ -141,8 +146,18 @@ Layers, top to bottom, each depending only on the ones below:
   `speech.voice_designs`). `takes.py`: `LineRequest`, `fingerprint` (includes
   `guidance_scale`, not the server URL) and the `state.json` models; a take is current when
   its fingerprint matches the present inputs with its own seed. `project.py` owns the
-  directory and atomic writes; `render.py` synthesizes lines without a current take and
-  saves state after each; `commands.py` is the argparse side, wired from `cli.py`.
+  directory and atomic writes (`edit_line` = `apply_annotations` + `check` on that line);
+  `render.py` synthesizes lines without a current take and saves state after each;
+  `commands.py` is the argparse side, wired from `cli.py`, and the review terminal (cbreak
+  single keys, polled because kqueue rejects ttys on macOS; `$VISUAL`/`$EDITOR`).
+  Review (8.5): `review.py` is a pure state machine (`step(review, view, key)` returns
+  effects); `review_session.py` executes them with injected terminal, `AudioPlayer` and
+  provider and saves `state.json` after every effect, before the next key (`review.position`,
+  `lines.X.selected`, `takes[].qa`). `qa.py` (standard library only) measures a take once
+  (stored in `takes[].qa`, redone when `QA_VERSION` changes) and recomputes flags each
+  review (rate against the speaker's median, clipping, leading/trailing silence,
+  near-silent). `audio.py` joins WAVs with silences (`c`, and export in 8.6);
+  `script.pause_between` picks the pause from `cast.pauses_ms`.
 - `notifications/desktop.py` picks `terminal-notifier`, `osascript`, `notify-send` or PowerShell.
   On Windows the toast needs Windows PowerShell 5.1 (`powershell`); `pwsh` is a playback-only
   fallback (`playback/backends.py`) because the WinRT projection is unavailable in PowerShell 7.

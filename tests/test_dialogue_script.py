@@ -20,11 +20,11 @@ from voxello.dialogue.script import (
 )
 from voxello.errors import INVALID_INSTRUCTIONS, INVALID_SCRIPT, VoxelloError
 
-SOURCE = """Francesca cercò i suoi occhi.
+SOURCE = """Anna aprì la finestra.
 
-«Metto il telefono in carica.» disse Marco.
+«Porto fuori il cane.» disse Bruno.
 
-«Nello studio?» domandò Francesca.
+«Fino al parco?» domandò Anna.
 
 ---
 
@@ -38,15 +38,15 @@ def cast_data(**overrides: Any) -> dict[str, Any]:
         "narrator": "narratore",
         "characters": {
             "narratore": {"voice": "onyx"},
-            "marco": {
-                "voice": "clone:marco",
+            "bruno": {
+                "voice": "clone:bruno",
                 "speed": 0.95,
                 "registers": {
-                    "whisper": "clone:marco-whisper",
+                    "whisper": "clone:bruno-whisper",
                     "sad": {"instructions": "Male, Low Pitch"},
                 },
             },
-            "francesca": {"instructions": "female, young adult"},
+            "anna": {"instructions": "female, young adult"},
         },
     }
     data.update(overrides)
@@ -66,7 +66,7 @@ def cast() -> Cast:
 def annotated(script: Script) -> Script:
     return apply_annotations(
         script,
-        {"p002.1": {"speaker": "marco"}, "p002.2": {"attribution": True}},
+        {"p002.1": {"speaker": "bruno"}, "p002.2": {"attribution": True}},
     ).script
 
 
@@ -96,8 +96,8 @@ def test_script_yaml_round_trip_omits_defaults(script: Script) -> None:
     script = annotated(script)
     text = script.to_yaml()
     assert "register" not in text  # defaults stay out of the file
-    assert "speaker: marco" in text
-    assert "«Metto il telefono in carica.»" in text  # unicode kept readable
+    assert "speaker: bruno" in text
+    assert "«Porto fuori il cane.»" in text  # unicode kept readable
     assert Script.from_yaml(text) == script
 
 
@@ -116,16 +116,16 @@ def test_annotations_merge_by_id_and_null_resets(script: Script) -> None:
     result = apply_annotations(
         script,
         {
-            "p002.1": {"speaker": "marco", "register": "whisper", "speed": 0.9},
+            "p002.1": {"speaker": "bruno", "register": "whisper", "speed": 0.9},
             "p002.2": {"attribution": True},
         },
     )
     assert result.changed == ["p002.1", "p002.2"]
     seg = by_id(result.script, "p002.1")
-    assert (seg.speaker, seg.register_, seg.speed) == ("marco", "whisper", 0.9)
+    assert (seg.speaker, seg.register_, seg.speed) == ("bruno", "whisper", 0.9)
     reset = apply_annotations(result.script, {"p002.1": {"register": None, "speed": None}})
     seg = by_id(reset.script, "p002.1")
-    assert (seg.speaker, seg.register_, seg.speed) == ("marco", None, None)
+    assert (seg.speaker, seg.register_, seg.speed) == ("bruno", None, None)
     assert by_id(script, "p002.1").speaker is None  # the input is not mutated
 
 
@@ -142,12 +142,12 @@ def test_unchanged_annotation_is_not_reported(script: Script) -> None:
 @pytest.mark.parametrize(
     ("data", "fragment"),
     [
-        ({"p099.1": {"speaker": "marco"}}, "p099.1: unknown segment id"),
+        ({"p099.1": {"speaker": "bruno"}}, "p099.1: unknown segment id"),
         ({"p002.1": {"text": "«Altro.»"}}, "p002.1: `text` cannot change"),
         ({"p002.1": {"kind": "narration"}}, "p002.1: `kind` cannot be annotated"),
         ({"p002.1": {"colour": "red"}}, "p002.1: unknown field `colour`"),
         ({"p002.1": {"speed": 9}}, "p002.1: speed"),
-        ({"p002.1": "marco"}, "p002.1: expected a mapping"),
+        ({"p002.1": "bruno"}, "p002.1: expected a mapping"),
         (["p002.1"], "a mapping of segment ids"),
     ],
 )
@@ -160,7 +160,7 @@ def test_bad_annotations_are_rejected_whole(script: Script, data: object, fragme
 
 def test_one_bad_entry_rejects_the_whole_file(script: Script) -> None:
     with pytest.raises(VoxelloError) as err:
-        apply_annotations(script, {"p002.1": {"speaker": "marco"}, "p099.1": {}})
+        apply_annotations(script, {"p002.1": {"speaker": "bruno"}, "p099.1": {}})
     assert "p099.1" in err.value.message
 
 
@@ -169,9 +169,9 @@ def test_one_bad_entry_rejects_the_whole_file(script: Script) -> None:
 
 def test_effective_tts_text_and_speaker(script: Script, cast: Cast) -> None:
     script = annotated(script)
-    assert effective_tts_text(by_id(script, "p002.1")) == "Metto il telefono in carica."
+    assert effective_tts_text(by_id(script, "p002.1")) == "Porto fuori il cane."
     assert effective_tts_text(by_id(script, "p005.1")) == "Scena 2"
-    assert speaker_of(by_id(script, "p002.1"), cast) == "marco"
+    assert speaker_of(by_id(script, "p002.1"), cast) == "bruno"
     assert speaker_of(by_id(script, "p001.1"), cast) == "narratore"
     assert speaker_of(by_id(script, "p005.1"), cast) == "narratore"
     assert speaker_of(by_id(script, "p004.1"), cast) is None  # breaks are silent
@@ -184,11 +184,11 @@ def test_effective_tts_text_and_speaker(script: Script, cast: Cast) -> None:
 @pytest.mark.parametrize(
     ("speaker", "register", "expected"),
     [
-        ("marco", None, VoiceChoice("clone:marco", None)),
-        ("marco", "whisper", VoiceChoice("clone:marco-whisper", None)),
-        ("marco", "angry", VoiceChoice("clone:marco", None)),  # missing register: main voice
-        ("marco", "sad", VoiceChoice(None, "male, low pitch")),
-        ("francesca", None, VoiceChoice(None, "female, young adult")),
+        ("bruno", None, VoiceChoice("clone:bruno", None)),
+        ("bruno", "whisper", VoiceChoice("clone:bruno-whisper", None)),
+        ("bruno", "angry", VoiceChoice("clone:bruno", None)),  # missing register: main voice
+        ("bruno", "sad", VoiceChoice(None, "male, low pitch")),
+        ("anna", None, VoiceChoice(None, "female, young adult")),
         ("narratore", None, VoiceChoice(None, "male, elderly")),  # a design name from config
     ],
 )
@@ -202,10 +202,10 @@ def test_resolve_line_voice(speaker: str, register: str | None, expected: VoiceC
 
 def test_resolve_line_voice_rejects_bad_instructions() -> None:
     data = cast_data()
-    data["characters"]["francesca"] = {"instructions": "female, purple"}
+    data["characters"]["anna"] = {"instructions": "female, purple"}
     cast = Cast.model_validate(data)
     with pytest.raises(VoxelloError) as err:
-        resolve_line_voice(cast, "francesca", None, {})
+        resolve_line_voice(cast, "anna", None, {})
     assert err.value.code == INVALID_INSTRUCTIONS
 
 
@@ -256,7 +256,7 @@ def messages(issues: list[Any]) -> list[str]:
 def test_check_passes_on_a_complete_project(script: Script, cast: Cast) -> None:
     script = apply_annotations(
         annotated(script),
-        {"p003.1": {"speaker": "francesca", "tts_text": "[question-ah] Nello studio?"}},
+        {"p003.1": {"speaker": "anna", "tts_text": "[question-ah] Fino al parco?"}},
     ).script
     report = check(script, SOURCE, cast, {})
     assert report.errors == []
@@ -274,13 +274,13 @@ def test_check_without_cast_only_checks_structure(script: Script) -> None:
 
 
 def test_check_detects_a_changed_source(script: Script) -> None:
-    report = check(script, SOURCE.replace("occhi", "mani"), None, {})
+    report = check(script, SOURCE.replace("finestra", "porta"), None, {})
     assert any("source.txt changed" in m for m in messages(report.errors))
 
 
 def test_check_proves_the_rebuild(script: Script) -> None:
     broken = script.model_copy(deep=True)
-    broken.segments[0].text = "Francesca cercò i suoi."  # edited by hand in script.yaml
+    broken.segments[0].text = "Anna aprì la."  # edited by hand in script.yaml
     report = check(broken, SOURCE, None, {})
     assert "p001.1: the segments do not rebuild source.txt from here" in messages(report.errors)
     dropped = script.model_copy(deep=True)
@@ -304,8 +304,8 @@ def test_check_cast_rules(script: Script, cast: Cast) -> None:
         {
             "p001.1": {"attribution": False, "tts_text": "  "},
             "p002.1": {"speaker": "giulia"},
-            "p002.2": {"register": "whisper", "speaker": "marco"},
-            "p003.1": {"speaker": "marco", "register": "angry", "attribution": True},
+            "p002.2": {"register": "whisper", "speaker": "bruno"},
+            "p003.1": {"speaker": "bruno", "register": "angry", "attribution": True},
         },
     ).script
     report = check(script, SOURCE, cast, {})
@@ -315,7 +315,7 @@ def test_check_cast_rules(script: Script, cast: Cast) -> None:
         "p003.1: attribution applies to narration only",
     ]
     assert messages(report.warnings) == [
-        "p003.1: register 'angry' is not in the cast for marco; the main voice is used",
+        "p003.1: register 'angry' is not in the cast for bruno; the main voice is used",
     ]
 
 
@@ -323,9 +323,9 @@ def test_check_tags(script: Script, cast: Cast) -> None:
     script = apply_annotations(
         annotated(script),
         {
-            "p001.1": {"tts_text": "[sigh] [laughter] Francesca cercò i suoi occhi."},
-            "p002.1": {"tts_text": "Metto [sigh] il telefono."},
-            "p003.1": {"speaker": "francesca", "tts_text": "[cough] Nello studio? [1]"},
+            "p001.1": {"tts_text": "[sigh] [laughter] Anna aprì la finestra."},
+            "p002.1": {"tts_text": "Porto [sigh] fuori il cane."},
+            "p003.1": {"speaker": "anna", "tts_text": "[cough] Fino al parco? [1]"},
         },
     ).script
     report = check(script, SOURCE, cast, {})
@@ -339,11 +339,11 @@ def test_check_tags(script: Script, cast: Cast) -> None:
 
 def test_check_reports_unresolvable_voices(script: Script) -> None:
     data = cast_data()
-    data["characters"]["francesca"] = {"instructions": "female, purple"}
+    data["characters"]["anna"] = {"instructions": "female, purple"}
     cast = Cast.model_validate(data)
-    script = apply_annotations(annotated(script), {"p003.1": {"speaker": "francesca"}}).script
+    script = apply_annotations(annotated(script), {"p003.1": {"speaker": "anna"}}).script
     report = check(script, SOURCE, cast, {})
-    assert any(m.startswith("francesca: ") for m in messages(report.errors))
+    assert any(m.startswith("anna: ") for m in messages(report.errors))
 
 
 def test_check_skipped_lines_need_no_text(script: Script, cast: Cast) -> None:

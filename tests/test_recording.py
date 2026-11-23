@@ -15,8 +15,10 @@ from voxello.errors import (
 )
 from voxello.recording.ffmpeg import (
     CLEANUP_FILTER,
+    FfmpegCleaner,
     FfmpegRecorder,
     capture_input,
+    detect_cleaner,
     detect_recorder,
 )
 from voxello.recording.registers import (
@@ -241,6 +243,26 @@ def test_prepare_runs_the_cleanup_command(tmp_path: Path):
     recorder = make_recorder(run=ok)
     recorder.prepare(tmp_path / "raw.wav", tmp_path / "out.wav")
     assert seen == [recorder.prepare_command(tmp_path / "raw.wav", tmp_path / "out.wav")]
+
+
+def test_prepare_can_cut_a_window_of_a_longer_recording(tmp_path: Path):
+    command = make_recorder().prepare_command(
+        tmp_path / "long.m4a", tmp_path / "out.wav", start=12.5, duration=8
+    )
+    source = command.index("-i")
+    assert command[command.index("-ss") + 1] == "12.5"
+    assert command[command.index("-t") + 1] == "8"
+    assert command.index("-ss") < source and command.index("-t") < source  # input options
+    assert "-ss" not in make_recorder().prepare_command(tmp_path / "a.wav", tmp_path / "b.wav")
+
+
+def test_detect_cleaner_needs_only_ffmpeg_on_any_platform():
+    cleaner = detect_cleaner(which=lambda name: "/bin/ffmpeg" if name == "ffmpeg" else None)
+    assert isinstance(cleaner, FfmpegCleaner)
+    assert cleaner.ffmpeg == "/bin/ffmpeg"
+    with pytest.raises(VoxelloError) as exc:
+        detect_cleaner(which=lambda _name: None)
+    assert exc.value.code == RECORDER_UNAVAILABLE
 
 
 # -- guided session --------------------------------------------------------------------------

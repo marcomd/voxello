@@ -29,6 +29,20 @@ change the MCP tool signatures or the configuration layout.
   lines per speaker, and `render` synthesizes one reproducible take per line (fingerprint of
   text, voice, language, speed, num_step, seed and guidance_scale), resumably and only for
   lines that changed. New error code `invalid_script`.
+- `voxello dialogue review [--from ID] [--pending] [--flagged]` (roadmap 8.5) plays every line
+  and takes single keys: Enter approves the chosen take, `r` renders a new take with the next
+  unused seed (older takes are kept), `1`-`9` pick a take, `p` replays, `c` plays the line
+  between the previous approved line and the next one with the cast's pauses, `e` edits
+  `tts_text` in `$EDITOR`, `g` changes register, `+`/`-` change speed by 0.05, `n`/`b` or
+  the arrows move, `q` quits. Edits go through the same validation as `dialogue annotate`
+  (`text` never changes) and the line is rendered again with the seed of the chosen take.
+  Every action is saved in `state.json` before the next key, and review resumes where it
+  stopped. Takes are flagged for a speaking rate far from the speaker's usual one, clipping,
+  long leading or trailing silence and near-silent audio; `--flagged` reviews those first.
+- `voxello voice clone NAME FILE --prepare [--start S] [--duration D]` cleans a recording you
+  already have (any format ffmpeg reads) like `voice record` does, optionally cutting a
+  window, clones the clean clip and keeps it in `storage.recordings_dir`. Needs `ffmpeg`;
+  works on Windows too.
 - The TTS provider accepts per-request `seed`, `speed` and `num_step`
   (`SynthesisOptions`): the same seed reproduces the same audio. `speak` and `notify` do not
   use them yet, so their requests and cache keys are unchanged.
