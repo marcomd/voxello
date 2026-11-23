@@ -14,15 +14,15 @@ from voxello.dialogue.audio import AudioFormatError, Silence, concatenate
 from voxello.dialogue.project import Project
 from voxello.dialogue.script import pause_between
 
-SOURCE = """Francesca cercò i suoi occhi.
+SOURCE = """Anna aprì la finestra.
 
-«Metto il telefono in carica.» disse Marco. «Poi esco.»
+«Porto fuori il cane.» disse Bruno. «Poi esco.»
 
-«Nello studio?»
+«Fino al parco?»
 
 ---
 
-Marco annuì.
+Bruno rise.
 """
 
 CAST: dict[str, Any] = {
@@ -31,8 +31,8 @@ CAST: dict[str, Any] = {
     "pauses_ms": {"same_speaker": 10, "speaker_change": 20, "paragraph": 30, "break": 40},
     "characters": {
         "narratore": {"voice": "onyx"},
-        "marco": {"voice": "clone:marco"},
-        "francesca": {"voice": "clone:francesca"},
+        "bruno": {"voice": "clone:bruno"},
+        "anna": {"voice": "clone:anna"},
     },
 }
 
@@ -72,9 +72,9 @@ def project(tmp_path: Path) -> Project:
     project = Project.init(source, tmp_path / "chapter")
     project.annotate(
         {
-            "p002.1": {"speaker": "marco"},
-            "p002.3": {"speaker": "marco"},
-            "p003.1": {"speaker": "francesca"},
+            "p002.1": {"speaker": "bruno"},
+            "p002.3": {"speaker": "bruno"},
+            "p003.1": {"speaker": "anna"},
         }
     )
     project.cast_path.write_text(yaml.safe_dump(CAST), encoding="utf-8")
@@ -84,8 +84,8 @@ def project(tmp_path: Path) -> Project:
 @pytest.mark.parametrize(
     ("first", "second", "pause"),
     [
-        ("p002.1", "p002.2", 20),  # marco, then the narrator's attribution
-        ("p002.1", "p002.3", 10),  # marco on both sides of the attribution
+        ("p002.1", "p002.2", 20),  # bruno, then the narrator's attribution
+        ("p002.1", "p002.3", 10),  # bruno on both sides of the attribution
         ("p001.1", "p002.1", 30),  # a new paragraph
         ("p003.1", "p005.1", 40),  # a break in between
     ],

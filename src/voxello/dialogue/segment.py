@@ -13,7 +13,7 @@ Italian conventions:
   ``la chiamava «tesoro»``, stay inside the narration;
 - dash dialogue: a paragraph that starts with ``—`` or ``–``; a dash preceded by whitespace
   closes the speech before an attribution, and the next one reopens it;
-- punctuation right after a closing quote belongs to the speech (``«Sono piccolissimi»,``);
+- punctuation right after a closing quote belongs to the speech (``«Sono nuovi»,``);
 - apostrophes (``'``, ``’``) are never quotes.
 """
 

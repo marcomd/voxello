@@ -278,7 +278,7 @@ Workflow the user sees, driven by the `dialogue` skill:
 voxello dialogue init chapter1.txt          # project dir, deterministic segments
   (agent annotates segments in chunks)      # voxello dialogue annotate FILE, dialogue check
   (agent interviews the user on the cast)   # writes cast.yaml; offers voxello voice record
-voxello voice record marco --register whisper   # guided recording + consent + clone
+voxello voice record bruno --register whisper   # guided recording + consent + clone
 voxello dialogue render                     # one take per line, resumable
 voxello dialogue review                     # terminal loop: approve, regenerate, edit
 voxello dialogue play --from 12             # whole scene, shows the line being played
@@ -301,15 +301,15 @@ chapter1/
 # cast.yaml
 language: it
 narrator: narratore
-attributions: keep          # keep | drop narration segments flagged as "disse Marco"
+attributions: keep          # keep | drop narration segments flagged as "disse Bruno"
 generation: {num_step: 16, seed: 1}
 pauses_ms: {same_speaker: 250, speaker_change: 450, paragraph: 700, break: 1500}
 characters:
   narratore: {voice: clone:narratore}
-  marco:
-    voice: clone:marco                       # main voice, also the fallback for registers
-    registers: {whisper: clone:marco-whisper, sad: clone:marco-sad}
-  francesca: {voice: clone:francesca}        # registers can be recorded later
+  bruno:
+    voice: clone:bruno                       # main voice, also the fallback for registers
+    registers: {whisper: clone:bruno-whisper, sad: clone:bruno-sad}
+  anna: {voice: clone:anna}                  # registers can be recorded later
 ```
 
 A character (and a register, written as a bare voice or `{instructions: ...}`) has exactly
@@ -375,10 +375,10 @@ As built (details settled before implementation):
 - Segment kinds `narration`, `speech`, `heading` (a paragraph starting with `#`, read by the
   narrator without the marks) and `break` (`---`, `***`, `* * *`: a `pauses_ms.break` silence).
 - A quote opens speech only at a paragraph start, after a sentence end (also after a closing
-  quote: `«Bellissimo.» «Vero.»`), after `:`, or after `,` once a quote has closed in the
+  quote: `«Pronto.» «Arrivo.»`), after `:`, or after `,` once a quote has closed in the
   paragraph (the inciso); `la chiamava «tesoro»` stays narration. Only the outermost quotes
   count; punctuation right after a closing quote stays with the speech (`«Sono
-  piccolissimi»,`); apostrophes are never quotes. An unclosed quote runs to the paragraph end
+  nuovi»,`); apostrophes are never quotes. An unclosed quote runs to the paragraph end
   with a warning (the multi-paragraph convention).
 - Narration and long speech are grouped by whole sentences into the fewest segments of at
   most `max_chars` (300, `init --max-chars`, stored in `script.yaml`), balanced in length; a

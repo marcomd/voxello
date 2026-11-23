@@ -15,11 +15,11 @@ from voxello.dialogue import commands
 
 from .conftest import FakeProvider
 
-SOURCE = """Francesca cercò i suoi occhi.
+SOURCE = """Anna aprì la finestra.
 
-«Metto il telefono in carica.» disse Marco.
+«Porto fuori il cane.» disse Bruno.
 
-«Nello studio?» domandò Francesca.
+«Fino al parco?» domandò Anna.
 """
 
 CAST = {
@@ -27,8 +27,8 @@ CAST = {
     "narrator": "narratore",
     "characters": {
         "narratore": {"voice": "onyx"},
-        "marco": {"voice": "clone:marco"},
-        "francesca": {"voice": "clone:francesca"},
+        "bruno": {"voice": "clone:bruno"},
+        "anna": {"voice": "clone:anna"},
     },
 }
 
@@ -96,23 +96,23 @@ def test_commands_outside_a_project_fail(
 def test_segments_prints_a_chunk_with_annotations(
     project: Path, cfg: list[str], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert annotate(cfg, project, {"p002.1": {"speaker": "marco"}}) == 0
+    assert annotate(cfg, project, {"p002.1": {"speaker": "bruno"}}) == 0
     assert "Annotated 1 segment: p002.1" in capsys.readouterr().out
     assert run(cfg, project, "segments", "--from", "p002.1", "--count", "2") == 0
     assert capsys.readouterr().out.splitlines() == [
-        "p002.1 speech {speaker: marco} «Metto il telefono in carica.»",
-        "p002.2 narration disse Marco.",
+        "p002.1 speech {speaker: bruno} «Porto fuori il cane.»",
+        "p002.2 narration disse Bruno.",
     ]
 
 
 def test_segments_pending_lists_unassigned_speech(
     project: Path, cfg: list[str], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    annotate(cfg, project, {"p002.1": {"speaker": "marco"}})
+    annotate(cfg, project, {"p002.1": {"speaker": "bruno"}})
     capsys.readouterr()
     assert run(cfg, project, "segments", "--pending") == 0
     assert capsys.readouterr().out.splitlines() == [
-        "p003.1 speech «Nello studio?»",
+        "p003.1 speech «Fino al parco?»",
     ]
 
 
@@ -121,7 +121,7 @@ def test_annotate_from_stdin_and_rejection(
 ) -> None:
     import io
 
-    monkeypatch.setattr("sys.stdin", io.StringIO("p002.1: {speaker: marco}\n"))
+    monkeypatch.setattr("sys.stdin", io.StringIO("p002.1: {speaker: bruno}\n"))
     assert run(cfg, project, "annotate", "-") == 0
     assert annotate(cfg, project, {"p002.1": {"text": "altro"}}) == 1
     assert "p002.1: `text` cannot change" in capsys.readouterr().err
@@ -145,7 +145,7 @@ def test_check_reports_errors_then_passes(
     assert "error: p002.1: speech has no speaker" in out
     assert "warning: cast.yaml is missing" in out
 
-    annotate(cfg, project, {"p002.1": {"speaker": "marco"}, "p003.1": {"speaker": "francesca"}})
+    annotate(cfg, project, {"p002.1": {"speaker": "bruno"}, "p003.1": {"speaker": "anna"}})
     (project / "cast.yaml").write_text(yaml.safe_dump(CAST), encoding="utf-8")
     capsys.readouterr()
     assert run(cfg, project, "check") == 0
@@ -160,9 +160,9 @@ def test_show_is_a_screenplay(
         cfg,
         project,
         {
-            "p002.1": {"speaker": "marco", "register": "whisper"},
+            "p002.1": {"speaker": "bruno", "register": "whisper"},
             "p002.2": {"attribution": True},
-            "p003.1": {"speaker": "francesca", "tts_text": "[sigh] Nello studio?"},
+            "p003.1": {"speaker": "anna", "tts_text": "[sigh] Fino al parco?"},
             "p003.2": {"skip": True},
         },
     )
@@ -170,11 +170,11 @@ def test_show_is_a_screenplay(
     capsys.readouterr()
     assert run(cfg, project, "show") == 0
     lines = capsys.readouterr().out.splitlines()
-    assert lines[0].split(None, 2) == ["p001.1", "NARRATORE", "Francesca cercò i suoi occhi."]
-    assert "MARCO (whisper)" in lines[1]
+    assert lines[0].split(None, 2) == ["p001.1", "NARRATORE", "Anna aprì la finestra."]
+    assert "BRUNO (whisper)" in lines[1]
     assert "(attribution)" in lines[2]
-    assert lines[3].endswith("[sigh] Nello studio?")
-    assert lines[4] == "          text: «Nello studio?»"
+    assert lines[3].endswith("[sigh] Fino al parco?")
+    assert lines[4] == "          text: «Fino al parco?»"
     assert "(skip)" in lines[5]
 
 
@@ -190,11 +190,11 @@ def test_show_without_cast_marks_unassigned(
 def test_stats_counts_lines_and_characters(
     project: Path, cfg: list[str], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    annotate(cfg, project, {"p002.1": {"speaker": "marco"}})
+    annotate(cfg, project, {"p002.1": {"speaker": "bruno"}})
     capsys.readouterr()
     assert run(cfg, project, "stats") == 0
     out = capsys.readouterr().out
-    assert "marco" in out
+    assert "bruno" in out
     assert "(narration)" in out
     assert "unassigned speech: 1 line" in out
 
@@ -205,7 +205,7 @@ def test_render_uses_the_provider_and_reports_progress(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    annotate(cfg, project, {"p002.1": {"speaker": "marco"}, "p003.1": {"speaker": "francesca"}})
+    annotate(cfg, project, {"p002.1": {"speaker": "bruno"}, "p003.1": {"speaker": "anna"}})
     (project / "cast.yaml").write_text(yaml.safe_dump(CAST), encoding="utf-8")
     provider = FakeProvider()
     monkeypatch.setattr(commands, "make_provider", lambda _settings: provider)
@@ -271,7 +271,7 @@ def review_project(
 ) -> Path:
     from .conftest import FakePlayer
 
-    annotate(cfg, project, {"p002.1": {"speaker": "marco"}, "p003.1": {"speaker": "francesca"}})
+    annotate(cfg, project, {"p002.1": {"speaker": "bruno"}, "p003.1": {"speaker": "anna"}})
     (project / "cast.yaml").write_text(yaml.safe_dump(CAST), encoding="utf-8")
     monkeypatch.setattr(commands, "make_provider", lambda _settings: FakeProvider())
     monkeypatch.setattr(commands, "make_player", lambda _settings: FakePlayer())

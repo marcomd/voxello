@@ -38,9 +38,9 @@ def view(**overrides: object) -> LineView:
         "segment_id": "p002.1",
         "number": 2,
         "total": 3,
-        "speaker": "marco",
+        "speaker": "bruno",
         "register": None,
-        "text": "«Andiamo a fare colazione?»",
+        "text": "«Usciamo adesso?»",
         "tts_text": None,
         "speed": None,
         "base_seed": 1,
@@ -139,7 +139,7 @@ def test_edits_keep_the_seed_of_the_chosen_take() -> None:
 
 def test_g_without_registers_says_so() -> None:
     _, effects = step(REVIEW, view(registers=()), "g")
-    assert effects == [Notice("marco has no registers in cast.yaml.")]
+    assert effects == [Notice("bruno has no registers in cast.yaml.")]
 
 
 @pytest.mark.parametrize(
@@ -231,8 +231,8 @@ def test_start_index() -> None:
 def test_format_line_minimal() -> None:
     lines = format_line(view(takes=(TAKES[0],), chosen="aaa", registers=()))
     assert lines == [
-        "[2/3] p002.1  MARCO  take 1/1 · seed 1 · 1.2 s · not approved",
-        "  text      «Andiamo a fare colazione?»",
+        "[2/3] p002.1  BRUNO  take 1/1 · seed 1 · 1.2 s · not approved",
+        "  text      «Usciamo adesso?»",
     ]
 
 
@@ -240,18 +240,18 @@ def test_format_line_full() -> None:
     lines = format_line(
         view(
             register="whisper",
-            tts_text="[question-ah] Andiamo a fare colazione?",
+            tts_text="[question-ah] Usciamo adesso?",
             speed=0.95,
             approved="bbb",
-            flags=(Flag("slow", "slow 9.1 c/s (marco ~14.2)"), Flag("x", "trailing silence")),
+            flags=(Flag("slow", "slow 9.1 c/s (bruno ~14.2)"), Flag("x", "trailing silence")),
         )
     )
     assert lines == [
-        "[2/3] p002.1  MARCO (whisper)  take 2/3 · seed 2 · 1.4 s · approved",
-        "  text      «Andiamo a fare colazione?»",
-        "  tts_text  [question-ah] Andiamo a fare colazione?",
+        "[2/3] p002.1  BRUNO (whisper)  take 2/3 · seed 2 · 1.4 s · approved",
+        "  text      «Usciamo adesso?»",
+        "  tts_text  [question-ah] Usciamo adesso?",
         "  speed     0.95",
-        "  ! slow 9.1 c/s (marco ~14.2) · trailing silence",
+        "  ! slow 9.1 c/s (bruno ~14.2) · trailing silence",
     ]
 
 

@@ -14,9 +14,9 @@ from voxello.dialogue import qa
 from voxello.dialogue.project import Project
 from voxello.dialogue.takes import LineRequest, LineState, State, Take
 
-SOURCE = """Francesca cercò i suoi occhi.
+SOURCE = """Anna aprì la finestra.
 
-«Metto il telefono in carica.»
+«Porto fuori il cane.»
 """
 
 CAST: dict[str, Any] = {
@@ -24,7 +24,7 @@ CAST: dict[str, Any] = {
     "narrator": "narratore",
     "characters": {
         "narratore": {"voice": "onyx"},
-        "marco": {"voice": "clone:marco", "registers": {"whisper": "clone:marco-whisper"}},
+        "bruno": {"voice": "clone:bruno", "registers": {"whisper": "clone:bruno-whisper"}},
     },
 }
 
@@ -34,13 +34,13 @@ def project(tmp_path: Path) -> Project:
     source = tmp_path / "chapter.txt"
     source.write_text(SOURCE, encoding="utf-8")
     project = Project.init(source, tmp_path / "chapter")
-    project.annotate({"p002.1": {"speaker": "marco"}})
+    project.annotate({"p002.1": {"speaker": "bruno"}})
     project.cast_path.write_text(yaml.safe_dump(CAST), encoding="utf-8")
     return project
 
 
 def request(seed: int = 1) -> LineRequest:
-    return LineRequest("Ciao.", "clone:marco", None, "it", None, 16, seed, None)
+    return LineRequest("Ciao.", "clone:bruno", None, "it", None, 16, seed, None)
 
 
 def test_an_older_state_file_loads_with_the_new_fields_empty(project: Project) -> None:
@@ -111,7 +111,7 @@ def test_edit_line_saves_valid_changes(project: Project) -> None:
 @pytest.mark.parametrize(
     ("fields", "message"),
     [
-        ({"tts_text": "[shout] Metto il telefono."}, "tag [shout] is not allowed"),
+        ({"tts_text": "[shout] Porto fuori il cane."}, "tag [shout] is not allowed"),
         ({"tts_text": "   "}, "tts_text is empty"),
         ({"speed": 9.0}, "speed"),
         ({"text": "changed"}, "`text` cannot change"),

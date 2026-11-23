@@ -16,7 +16,7 @@ settled what the engine can do:
   audio, and other seeds give other takes. A take is fully described by those values.
 - One line takes about 2-2.8 s to synthesize regardless of length; `num_step` 16, 32 and 48
   were rated the same, so 16 is the default here. `speed` 0.85-1.15, punctuation (`?`, `!`,
-  `...`) and very short lines ("Piove?", "L'ultima.") all sound right.
+  `...`) and very short lines ("Nevica?", "Arrivo.") all sound right.
 - OmniVoice has no emotion control. Of the 13 non-verbal tags, eight work in Italian at the
   start of a line (`[sigh]`, `[laughter]`, `[confirmation-en]`, `[question-ah]`,
   `[question-oh]`, `[surprise-ah]`, `[surprise-oh]`, `[dissatisfaction-hnn]`); the others
@@ -51,14 +51,14 @@ Option 3.
 - **Deterministic segmentation.** Voxello splits the source into numbered segments
   (quoted speech in `«»`, `“”`, `""` or dash dialogue, and narration split at sentence
   boundaries). The agent only labels segment ids: speaker, register, tags, speed, whether a
-  narration segment is a pure speech attribution ("disse Marco"). `dialogue check` proves the
+  narration segment is a pure speech attribution ("disse Bruno"). `dialogue check` proves the
   segments rebuild the source, so no sentence can be lost or paraphrased, and long texts can
   be annotated in chunks.
 - **The spoken text is explicit.** Each line keeps the source `text` and a `tts_text`
   (defaults to the text without quote marks) where tags and punctuation changes go; the
   difference is shown in review.
 - **Registers are recordings.** Expressiveness comes from one cloned profile per character
-  and register (`marco`, `marco-whisper`, `marco-sad`, ...), recorded with a guided
+  and register (`bruno`, `bruno-whisper`, `bruno-sad`, ...), recorded with a guided
   `voxello voice record` command, plus the allowed tags and `speed`. A missing register falls
   back to the character's main voice, so a cast works before every register is recorded.
 - **Takes are reproducible.** Audio is stored per line under a fingerprint of everything that

@@ -67,9 +67,9 @@ Assign each `speech` segment a speaker with `dialogue annotate`, using the actua
 ```yaml
 # annotations.yaml, example only: match the IDs and speakers to your source
 p002.1:
-  speaker: francesca
+  speaker: anna
 p003.1:
-  speaker: marco
+  speaker: bruno
 ```
 
 ```bash

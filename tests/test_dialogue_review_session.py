@@ -19,9 +19,9 @@ from voxello.dialogue.review_session import ReviewSession, ReviewSummary
 from voxello.errors import INVALID_SCRIPT, PLAYBACK_ERROR, TTS_PROVIDER_ERROR, VoxelloError
 from voxello.tts.base import SynthesisOptions, SynthesisResult
 
-SOURCE = """Francesca cercò i suoi occhi e poi guardò fuori dalla finestra.
+SOURCE = """Anna aprì la finestra e poi guardò il cortile.
 
-«Metto il telefono in carica nello studio.»
+«Porto fuori il cane fino al parco.»
 
 «Va bene, ma torna presto che ti aspetto.»
 """
@@ -33,8 +33,8 @@ CAST: dict[str, Any] = {
     "pauses_ms": {"same_speaker": 100, "speaker_change": 200, "paragraph": 300, "break": 400},
     "characters": {
         "narratore": {"voice": "onyx"},
-        "marco": {"voice": "clone:marco", "registers": {"whisper": "clone:marco-whisper"}},
-        "francesca": {"voice": "clone:francesca"},
+        "bruno": {"voice": "clone:bruno", "registers": {"whisper": "clone:bruno-whisper"}},
+        "anna": {"voice": "clone:anna"},
     },
 }
 
@@ -118,7 +118,7 @@ def project(tmp_path: Path) -> Project:
     source = tmp_path / "chapter.txt"
     source.write_text(SOURCE, encoding="utf-8")
     project = Project.init(source, tmp_path / "chapter")
-    project.annotate({"p002.1": {"speaker": "marco"}, "p003.1": {"speaker": "francesca"}})
+    project.annotate({"p002.1": {"speaker": "bruno"}, "p003.1": {"speaker": "anna"}})
     project.cast_path.write_text(yaml.safe_dump(CAST), encoding="utf-8")
     return project
 
@@ -281,12 +281,12 @@ async def test_e_edits_tts_text_and_renders_with_the_chosen_seed(
     project: Project, provider: ToneProvider
 ) -> None:
     keys = ["n", "r", "e", "enter", "q"]
-    await review(project, provider, keys, edits=["  Metto il telefono\n in carica.  "])
+    await review(project, provider, keys, edits=["  Porto fuori\n il cane.  "])
     seg = project.load_script().segment("p002.1")
-    assert seg.text == "«Metto il telefono in carica nello studio.»"
-    assert seg.tts_text == "Metto il telefono in carica."
+    assert seg.text == "«Porto fuori il cane fino al parco.»"
+    assert seg.tts_text == "Porto fuori il cane."
     # p001.1, p002.1 seed 1, r (seed 2), the edited line, then p003.1 after Enter
-    assert provider.calls[3][0] == "Metto il telefono in carica."
+    assert provider.calls[3][0] == "Porto fuori il cane."
     options = provider.options[3]
     assert options is not None and options.seed == 2
     line = state(project)["lines"]["p002.1"]
@@ -295,14 +295,12 @@ async def test_e_edits_tts_text_and_renders_with_the_chosen_seed(
 
 
 async def test_e_back_to_the_text_clears_tts_text(project: Project, provider: ToneProvider) -> None:
-    project.annotate({"p002.1": {"tts_text": "Metto il telefono."}})
-    await review(
-        project, provider, ["n", "e", "q"], edits=["Metto il telefono in carica nello studio."]
-    )
+    project.annotate({"p002.1": {"tts_text": "Porto fuori."}})
+    await review(project, provider, ["n", "e", "q"], edits=["Porto fuori il cane fino al parco."])
     assert project.load_script().segment("p002.1").tts_text is None
 
 
-@pytest.mark.parametrize("edited", [None, "", "Metto il telefono in carica nello studio."])
+@pytest.mark.parametrize("edited", [None, "", "Porto fuori il cane fino al parco."])
 async def test_e_without_a_change(
     project: Project, provider: ToneProvider, edited: str | None
 ) -> None:
@@ -324,10 +322,10 @@ async def test_e_with_a_bad_tag_changes_nothing(project: Project, provider: Tone
 async def test_g_changes_the_register(project: Project, provider: ToneProvider) -> None:
     _, terminal, _ = await review(project, provider, ["n", "g", "1", "g", "x", "q"])
     assert project.load_script().segment("p002.1").register_ == "whisper"
-    assert provider.calls[-1][1] == "clone:marco-whisper"
+    assert provider.calls[-1][1] == "clone:bruno-whisper"
     assert "0 main voice · 1 whisper" in terminal.text
     assert "Register unchanged." in terminal.out
-    assert "MARCO (whisper)" in terminal.text
+    assert "BRUNO (whisper)" in terminal.text
 
 
 async def test_plus_and_minus_change_speed(project: Project, provider: ToneProvider) -> None:

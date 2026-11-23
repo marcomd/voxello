@@ -60,7 +60,7 @@ class ScriptSegment(BaseModel):
     register_: str | None = Field(default=None, alias="register")
     tts_text: str | None = None
     speed: float | None = Field(default=None, ge=SPEED_RANGE[0], le=SPEED_RANGE[1])
-    attribution: bool = False  # narration that only says who speaks ("disse Marco.")
+    attribution: bool = False  # narration that only says who speaks ("disse Bruno.")
     skip: bool = False  # never spoken (a scene title's point-of-view marker, a note)
 
 
