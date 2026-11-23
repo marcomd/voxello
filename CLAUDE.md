@@ -44,6 +44,8 @@ uv run voxello dialogue annotate FILE|- [-p DIR]  # {id: {speaker, register, tts
 uv run voxello dialogue check|stats [-p DIR]
 uv run voxello dialogue render [-p DIR] [--lines A-B] [--force]   # needs cast.yaml
 uv run voxello dialogue review [-p DIR] [--from ID] [--pending] [--flagged]   # single keys, needs a TTY
+uv run voxello dialogue play [-p DIR] [--from ID]  # the scene with pauses; Ctrl-C offers review there
+uv run voxello dialogue export [-p DIR] [-o PATH] [--srt] [--allow-unapproved] [--no-level]
 uv run voxello serve                              # MCP server over stdio (what agents run)
 uv run voxello config init|path|show
 uv run voxello install claude [--yes] [--stop-hook] [--claude-dir DIR]   # skill + hook into ~/.claude, offer settings.json entries
@@ -156,8 +158,14 @@ Layers, top to bottom, each depending only on the ones below:
   `lines.X.selected`, `takes[].qa`). `qa.py` (standard library only) measures a take once
   (stored in `takes[].qa`, redone when `QA_VERSION` changes) and recomputes flags each
   review (rate against the speaker's median, clipping, leading/trailing silence,
-  near-silent). `audio.py` joins WAVs with silences (`c`, and export in 8.6);
-  `script.pause_between` picks the pause from `cast.pauses_ms`.
+  near-silent). `audio.py` joins WAVs with silences and per-clip gain, returning the frame
+  span of each clip (`c`, play, export); `script.pause_between` picks the pause from
+  `cast.pauses_ms`. Play and export (8.6): `Project.pick` is the take a line uses (approved
+  if current, else the chosen one). `play.py` (`PlayThrough`) plays take by take, keeping
+  `current` so the CLI can offer review after Ctrl-C. `export.py` refuses missing or
+  unapproved takes (`dialogue_not_ready`), evens loudness per line (speech-only RMS to
+  `TARGET_DB`, bounded by `MAX_GAIN_DB` and `PEAK_CEILING`), and writes the WAV, a timeline
+  built from the frames actually written and optional SRT, all through temporary siblings.
 - `notifications/desktop.py` picks `terminal-notifier`, `osascript`, `notify-send` or PowerShell.
   On Windows the toast needs Windows PowerShell 5.1 (`powershell`); `pwsh` is a playback-only
   fallback (`playback/backends.py`) because the WinRT projection is unavailable in PowerShell 7.

@@ -39,6 +39,16 @@ change the MCP tool signatures or the configuration layout.
   Every action is saved in `state.json` before the next key, and review resumes where it
   stopped. Takes are flagged for a speaking rate far from the speaker's usual one, clipping,
   long leading or trailing silence and near-silent audio; `--flagged` reviews those first.
+- `voxello dialogue play [--from ID]` (roadmap 8.6) plays the scene line by line with the
+  cast's pauses, printing the line being played; takes not approved yet are marked and lines
+  without a take are skipped. Ctrl-C stops and offers to open `review` at that line.
+- `voxello dialogue export [-o PATH] [--srt] [--allow-unapproved] [--no-level]` joins the
+  approved takes with the cast's pauses into `final.wav`, evening loudness per line (speech
+  RMS to -20 dBFS, at most +15 dB, peaks under -1 dBFS) so short lines rendered quietly match
+  the rest, and writes `final.timeline.json` (id, speaker, start and end in seconds and
+  frames, gain) and, with `--srt`, subtitles of the source words. It refuses lines without a
+  current or approved take unless `--allow-unapproved`, and leaves no partial file on
+  failure. New error code `dialogue_not_ready`.
 - `voxello voice clone NAME FILE --prepare [--start S] [--duration D]` cleans a recording you
   already have (any format ffmpeg reads) like `voice record` does, optionally cutting a
   window, clones the clean clip and keeps it in `storage.recordings_dir`. Needs `ffmpeg`;

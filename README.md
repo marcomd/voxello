@@ -234,9 +234,12 @@ voxello speak "Fatto." --voice clone:marco      # a voice cloned with `voxello v
 change register with `g`, or adjust speed with `+`/`-`. Quit with `q` and resume later;
 approvals, take selections and the review position are saved after each action.
 
+When every line is approved, `voxello dialogue play` plays the whole scene with the cast's
+pauses (Ctrl-C jumps into review at the line you stopped on) and `voxello dialogue export`
+writes `final.wav` with evened loudness, a timeline and, with `--srt`, subtitles.
+
 See [the review walkthrough](docs/dialogue-review.md) for a short test with a cloned narrator
-and the workflow for a chapter or an existing sample file. Whole-chapter playback and export
-are planned in roadmap 8.6.
+and the workflow for a chapter or an existing sample file.
 
 ## Register with your agent
 

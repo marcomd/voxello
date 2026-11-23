@@ -470,7 +470,7 @@ As built (details settled before implementation):
   can be cloned from a recording made elsewhere: the `voice record` cleanup (`FfmpegCleaner`,
   any platform), a window of the file, the clip kept in `storage.recordings_dir`.
 
-### 8.6 Play-through and export
+### 8.6 Play-through and export — done
 
 `dialogue play [--from ID]` plays approved takes (or the latest take, marked) line by line with
 the configured pauses, printing the current id; Ctrl-C stops and offers to open review at that
@@ -481,6 +481,30 @@ writes `final.wav`, `timeline.json` (id, speaker, start, end) and optionally `fi
 Acceptance: export refuses unapproved or stale lines unless asked; the timeline matches the
 WAV sample count. Tests: pause and gain arithmetic, concatenation of fixtures of mixed
 lengths, SRT formatting, refusal paths.
+
+As built:
+
+- `Project.pick` chooses a line's take for both commands: the approved take if it is still
+  current, else the chosen one. An edit already clears the approval when the line is
+  rendered again, so "stale" needs no state of its own: such a line is unapproved.
+- `play` plays take by take (one player process per line) rather than one joined file, so
+  the line being played is known; Ctrl-C asks `Open review at ID? [y/N]` when stdin is a
+  terminal, else prints the `review --from` command. Lines without a take are announced and
+  skipped; a player exiting with an error stops the play-through (`playback_error`).
+- Loudness: the RMS of the 20 ms windows above the QA silence threshold (-45 dBFS) is
+  brought to -20 dBFS (the median of the example4 takes was -19.6), with at most +15 dB and
+  peaks kept under -1 dBFS. On example4 the narrator's short attributions measured -28 to
+  -33 dB and get +8 to +12.6 dB; whispered lines are lifted as well, hence `--no-level`.
+- Files: `-o PATH` (default `PROJECT/final.wav`) names the WAV; the timeline is
+  `NAME.timeline.json` and the subtitles `NAME.srt` next to it. The timeline holds
+  `sample_rate`, `frames`, `duration_ms` and per line id, speaker, register, start and end in
+  seconds and frames, approval, take and gain in dB, taken from the frames actually written.
+  Subtitles show the source words without quote marks (headings without `#`), in blocks of
+  at most two rows of 42 characters, a long line's time shared by characters.
+- Errors: missing takes, unapproved lines, takes that cannot be levelled or joined (another
+  format) are `dialogue_not_ready`, naming the first ten ids. The WAV is written to a
+  temporary sibling and moved last; nothing partial is left behind. Export is standard
+  library only: example4 (39 lines, 5 min 28 s) exports in under a second.
 
 ### 8.7 Skill, install and documentation
 
@@ -512,7 +536,7 @@ the speaker's consent.
 | 8 | 8.1, 8.2 | Done: per-request seed/speed; guided recording, useful on its own for better clones |
 | 9 | 8.3, 8.4 | Done: segments, annotation and reproducible takes; a dialogue renders end to end |
 | 10 | 8.5 | Done: review by ear with single keys, QA flags, resumable |
-| 11 | 8.6, 8.7 | Export and the skill that drives it |
+| 11 | 8.6, 8.7 | 8.6 done: play-through and export; next the skill that drives it all |
 | 12 | Milestone 5 | On demand |
 
 Items 3.1 and 2.x were done before the first PyPI release (1.1) because they change the MCP
