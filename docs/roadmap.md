@@ -545,6 +545,36 @@ As built:
 - The README and `docs/dialogue-review.md` (a "Let your agent drive it" section) carry the
   user documentation; `docs/TUTORIAL.md` stays about the TTS server.
 
+## Future exploration — From sources to podcast-style dialogues
+
+Ideas to investigate, inspired by NotebookLM's Audio Overviews. These are discussion points,
+not scheduled milestones or implemented features; scope, design and acceptance criteria remain
+to be defined.
+
+Voxello's purpose remains giving AI agents a voice. A possible extension is to let the agent
+prepare a structured summary and dialogue from sources, then use Voxello to produce audio for
+later listening. Today `voice-dialogue` starts from an existing script and preserves its words;
+it does not summarize sources or write a new conversation.
+
+- **From sources to a listening script.** Explore agent-driven dialogue generation from meeting
+  transcripts, notes and documents. For meetings, cover key points, decisions, action owners,
+  deadlines and open questions, so users can listen to a summary instead of the full recording.
+- **Duration and depth.** Let the user choose a target listening duration and level of detail;
+  investigate how to adapt the script and estimate its actual spoken length.
+- **Suggested topics and focus.** Have the agent propose topics after reading the sources, then
+  let the user select, prioritize or add the questions the dialogue should focus on.
+- **Editorial approach.** Explore an explanatory overview, a debate between viewpoints, a
+  critical review that looks for weaknesses and assumptions, or a discussion highlighting
+  strengths and benefits. The chosen approach should remain grounded in the sources and make
+  the agent's analysis distinguishable from reported facts.
+- **Faithfulness and review.** Keep references back to the sources; preserve uncertainty and
+  disagreements. Consider separate hosts who discuss the material without attributing invented
+  statements to meeting participants. Let the user review the summary and script before audio
+  production.
+- **Skill workflow.** Investigate a preparation skill or stage that hands the approved script
+  to `voice-dialogue`, keeping language work in the agent and audio production deterministic
+  in Voxello, consistent with [decision 0003](decisions/0003-dialogue-production.md).
+
 ## Recommended order
 
 | Step | Item | Reason |

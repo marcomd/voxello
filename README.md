@@ -1,14 +1,23 @@
 # Voxello
 
-**A local voice and notification layer for AI agents.**
+**Give your AI a voice — from spoken updates to podcast-style dialogues.**
 
 ![cover.jpeg](docs/cover.jpeg)
 
-Voxello is a small MCP server that lets Claude Code, Codex, Cursor and other MCP clients
-`speak`, `notify`, `stop_speaking` and `get_status`. It sends text to a local TTS server
-(VoiceStudio, or the headless `omnivoice-server`, both running OmniVoice), plays the audio on
-your speaker, shows desktop notifications, and cleans up after itself. The agent decides *what* to say; Voxello
-handles *how* it is delivered.
+Voxello gives AI agents a voice on your machine. Hear a task summary, get a spoken alert when
+work finishes, or turn a prepared dialogue into audio with a different voice for each speaker.
+The agent decides *what* to say; Voxello handles *how* it is delivered.
+
+- **Listen as you work.** Claude Code, Codex, Cursor and other MCP clients can speak short
+  updates and send desktop notifications through Voxello.
+- **Listen when you have time.** Ask your AI to write a conversation summarizing a meeting,
+  research notes or a long document, then use the
+  [dialogue workflow](#review-a-narrated-text-or-dialogue) to produce audio you can review and
+  export. It also works with existing scenes, stories and book chapters.
+
+Voxello sends text to a TTS server on your machine or intranet (VoiceStudio or the headless
+`omnivoice-server`, both running OmniVoice). Short messages use the MCP tools `speak`, `notify`,
+`stop_speaking` and `get_status`; dialogue projects use the CLI, guided by an agent skill.
 
 ```
 Agent ──MCP──▶ Voxello ──HTTP──▶ VoiceStudio / omnivoice-server ──▶ WAV ──▶ afplay / mpv / PowerShell
@@ -228,24 +237,58 @@ voxello speak "Fatto." --voice clone:marco      # a voice cloned with `voxello v
 
 ## Review a narrated text or dialogue
 
-`voxello dialogue` splits a UTF-8 text into lines, renders a take for each voice in
-`cast.yaml`, and lets you review them in your terminal. Approve with Enter, regenerate with
+Dialogue extends Voxello's voice beyond short updates: turn a prepared script into audio with
+distinct voices and pauses, and listen to it like a podcast. For example, have your AI turn a
+meeting transcript into a structured conversation about the key points, decisions and next
+steps, then listen to that summary when you have time. A narrated story or chapter can use the
+same workflow, with a narrator and character voices.
+
+### Prepare the script
+
+Today, you prepare the dialogue yourself or ask your AI to write it first. For example:
+
+> Read meeting-transcript.txt and write a concise conversation between two hosts covering the
+> main topics, decisions and next steps. Stay faithful to the transcript and save the dialogue
+> in meeting-summary.txt.
+
+Then ask the agent to produce the audio:
+
+> Use voice-dialogue to turn meeting-summary.txt into audio with a different voice for each host.
+
+The `voice-dialogue` skill (installed by `voxello install claude` or `voxello install codex`)
+starts from an existing UTF-8 text. It annotates who speaks, helps you choose the voices, renders
+the lines and hands you the review, play and export commands. The skill preserves the script's
+words; summarizing sources and writing a new conversation are a separate step you request from
+your AI.
+
+### Produce, review and export
+
+`voxello dialogue` splits the script into lines and renders a take for each voice in
+`cast.yaml`. `voxello dialogue cast` drafts that file from the annotated speakers and your
+cloned voices, and `voxello dialogue status` tells you the next command at any point.
+
+Review the audio in your own terminal. Approve with Enter, regenerate with
 `r`, pick a take with `1`-`9`, replay with `p`, listen in context with `c`, edit with `e`,
 change register with `g`, or adjust speed with `+`/`-`. Quit with `q` and resume later;
-approvals, take selections and the review position are saved after each action.
+approvals, take selections and the review position are saved after each action. The project
+directory keeps the source text, audio takes and exported files so you can return to them.
 
 When every line is approved, `voxello dialogue play` plays the whole scene with the cast's
 pauses (Ctrl-C jumps into review at the line you stopped on) and `voxello dialogue export`
 writes `final.wav` with evened loudness, a timeline and, with `--srt`, subtitles.
-`voxello dialogue cast` drafts `cast.yaml` from the annotated speakers and your cloned voices,
-and `voxello dialogue status` tells you the next command at any point.
-
-The easiest way in is to ask your agent: the `voice-dialogue` skill (installed by
-`voxello install claude` or `voxello install codex`) annotates the text, drafts the cast with
-you, renders it and hands you the review, play and export commands.
 
 See [the review walkthrough](docs/dialogue-review.md) for a short test with a cloned narrator
 and the workflow for a chapter or an existing sample file.
+
+### Future exploration
+
+We are exploring a workflow in which the agent reads meeting transcripts or other sources,
+suggests topics and writes the dialogue before handing it to `voice-dialogue`. Ideas include a
+target listening duration, a choice of topics and an editorial approach: an explanatory
+overview, a debate, a critique looking for weaknesses, or a discussion highlighting strengths.
+Source references and script review would help keep the result faithful to the material.
+These are ideas for future development, with no scheduled implementation; see the
+[roadmap discussion points](docs/roadmap.md#future-exploration--from-sources-to-podcast-style-dialogues).
 
 ## Register with your agent
 
@@ -530,8 +573,8 @@ back as tool errors with a stable code: `tts_provider_unavailable`, `tts_provide
 
 - **Interrupt by default.** A new `speak` stops what is playing and clears the queue. Pass
   `interrupt: false` to queue instead (FIFO, `playback.max_queue_size` items).
-- **Short by design.** Text is capped at `limits.max_text_chars` (2000). Voice is for summaries
-  and status; the textual answer carries the details.
+- **Short MCP messages.** `speak` and `notify` text is capped at `limits.max_text_chars` (2000),
+  for summaries and status updates. Longer texts use the dialogue workflow, rendered line by line.
 - **Private by default.** Temporary audio lives in the OS cache directory with 0700 permissions,
   gets random names, and is deleted after playback and after `storage.temp_retention_minutes`.
   Logs record text length, not text, unless `logging.log_text: true`.
