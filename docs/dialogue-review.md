@@ -5,6 +5,23 @@ that prefix. Rendering needs the configured TTS server. Review needs your own in
 terminal and an audio player. The QA flags are signal and speaking-rate hints, not a check
 that every word was pronounced correctly.
 
+## Let your agent drive it
+
+`voxello install claude` and `voxello install codex` install the `voice-dialogue` skill. Ask
+your agent in plain words, for example:
+
+> Aiutami a generare il dialogo in tmp/example2.txt, dimmi cosa devo fare passo per passo.
+
+The agent creates the project, reads the segments in chunks and annotates speakers,
+registers, tags and attributions, drafts `cast.yaml` with `voxello dialogue cast`, asks you
+about the voices that are missing (an existing clone, a recording now, a design as a last
+resort), checks the project and renders it. Then it hands you the commands that need you at
+the keyboard: `voxello voice record` for missing voices, `review`, `play` and `export`. In
+Claude Code you can run them in the same session with a leading `!`.
+
+At any point, `voxello dialogue status -p DIR` prints where the project stands and the next
+command, so you (or a new agent session) can resume without remembering the steps.
+
 ## A short test with a cloned narrator
 
 List the available profiles with `uv run voxello voice list`. The example below assumes the
@@ -77,10 +94,20 @@ uv run voxello dialogue annotate annotations.yaml -p tmp/example2-review
 uv run voxello dialogue segments -p tmp/example2-review --pending
 ```
 
-Repeat until no speech lacks a speaker. Write `cast.yaml` as above, adding an entry under
-`characters` for each speaker and their voice ID. To hear everything with the narrator alone,
-assign speech to `narratore` too. Then run `check`, `show` and `stats` to verify the script,
-followed by `render` and `review`. Rendering skips current takes and can resume after an
+Repeat until no speech lacks a speaker (`voxello dialogue annotate --help` lists every field
+and the allowed tags). Then draft the cast from the speakers and the voices on your server:
+
+```bash
+uv run voxello dialogue cast -p tmp/example2-review            # prints the draft
+uv run voxello dialogue cast -p tmp/example2-review --write    # writes cast.yaml
+```
+
+Each character gets `clone:<name>` and every profile named `<name>-<register>` becomes a
+register; voices that do not exist yet are marked `TODO` with the `voxello voice record`
+command that creates them, so the cast works unchanged once they are recorded. Edit
+`cast.yaml` for anything else (another clone, a design, `attributions: drop`). To hear
+everything with the narrator alone, assign speech to `narratore` too. Then run `check`,
+`show` and `stats` to verify the script, followed by `render` and `review`. Rendering skips current takes and can resume after an
 interruption; review can also render missing takes as you reach them.
 
 Each line's audio is kept in the project directory.

@@ -237,6 +237,12 @@ approvals, take selections and the review position are saved after each action.
 When every line is approved, `voxello dialogue play` plays the whole scene with the cast's
 pauses (Ctrl-C jumps into review at the line you stopped on) and `voxello dialogue export`
 writes `final.wav` with evened loudness, a timeline and, with `--srt`, subtitles.
+`voxello dialogue cast` drafts `cast.yaml` from the annotated speakers and your cloned voices,
+and `voxello dialogue status` tells you the next command at any point.
+
+The easiest way in is to ask your agent: the `voice-dialogue` skill (installed by
+`voxello install claude` or `voxello install codex`) annotates the text, drafts the cast with
+you, renders it and hands you the review, play and export commands.
 
 See [the review walkthrough](docs/dialogue-review.md) for a short test with a cloned narrator
 and the workflow for a chapter or an existing sample file.
@@ -436,7 +442,9 @@ does that for you. Review or disable the Claude Code hooks with `/hooks`.
 **What gets installed.** The `voice-notify` skill (`~/.claude/skills/` or `~/.codex/skills/`)
 tells the agent how to write a spoken summary: one or two sentences, in your language, no code
 or paths, `priority: high` when it failed or is blocked, `cache: false`, voice left to the
-configuration. It can also be invoked explicitly with `/voice-notify`. The hook script
+configuration. It can also be invoked explicitly with `/voice-notify`. The `voice-dialogue`
+skill guides the agent through a multi-voice dialogue project (see
+[Review a narrated text or dialogue](#review-a-narrated-text-or-dialogue)). The hook script
 `voxello-notification-hook.sh` only finds the `voxello` command (on the PATH, in
 `~/.local/bin`, or `uv run --directory "$VOXELLO_REPO"` from a checkout) and hands it the event;
 when none is available it logs to stderr and exits without speaking. Adding a language for the

@@ -1,9 +1,9 @@
 """Install Voxello integrations into other tools (Claude Code and Codex).
 
-``voxello install claude`` copies the ``voice-notify`` skill and the hook script shipped
-inside the package (``voxello/assets/claude``) into the user's Claude Code directory and
-offers to register the Notification hook (and, on request, the Stop hook) in
-``settings.json``. ``voxello install codex`` copies the same skill and script into the Codex
+``voxello install claude`` copies the skills (``voice-notify``, ``voice-dialogue``) and the
+hook script shipped inside the package (``voxello/assets/claude``) into the user's Claude
+Code directory and offers to register the Notification hook (and, on request, the Stop hook)
+in ``settings.json``. ``voxello install codex`` copies the same skills and script into the Codex
 home and offers the Stop hook in ``hooks.json``, which has the same shape. The functions
 here are pure filesystem operations so they can be tested without a TTY; the interactive
 part lives in the CLI.
@@ -26,6 +26,7 @@ from voxello.errors import INVALID_PARAMETER, INVALID_SETTINGS_FILE, VoxelloErro
 CLAUDE_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
 CODEX_DIR_ENV_VAR = "CODEX_HOME"
 SKILL_NAME = "voice-notify"
+SKILL_NAMES = (SKILL_NAME, "voice-dialogue")  # every skill `install claude|codex` copies
 HOOK_FILENAME = "voxello-notification-hook.sh"
 HOOK_MATCHER = "permission_prompt|idle_prompt|agent_needs_input|elicitation_dialog"
 HOOK_TIMEOUT_SECONDS = 30
@@ -179,10 +180,10 @@ def _write_if_changed(path: Path, data: bytes, *, mode: int | None = None) -> In
     return InstalledFile(path, status)
 
 
-def install_skill(claude_dir: Path) -> InstalledFile:
-    """Write ``skills/voice-notify/SKILL.md`` under ``claude_dir``."""
-    data = asset_bytes("claude", "skills", SKILL_NAME, "SKILL.md")
-    return _write_if_changed(claude_dir / "skills" / SKILL_NAME / "SKILL.md", data)
+def install_skill(claude_dir: Path, name: str = SKILL_NAME) -> InstalledFile:
+    """Write ``skills/<name>/SKILL.md`` under ``claude_dir`` (or a Codex home)."""
+    data = asset_bytes("claude", "skills", name, "SKILL.md")
+    return _write_if_changed(claude_dir / "skills" / name / "SKILL.md", data)
 
 
 def install_hook(claude_dir: Path) -> InstalledFile:

@@ -634,3 +634,121 @@ def test_export_approved_lines_without_subtitles(
     assert captured.err == ""
     assert "Subtitles" not in captured.out
     assert (rendered_project / "final.wav").is_file()
+
+
+# --- cast draft, status and help (roadmap 8.7) ---------------------------------------------------
+
+
+def test_annotate_help_documents_the_fields_and_tags(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        main(["dialogue", "annotate", "--help"])
+    out = capsys.readouterr().out
+    for word in ("speaker", "register", "tts_text", "attribution", "skip", "[sigh]"):
+        assert word in out
+
+
+def test_cast_prints_a_draft_and_reports_missing_profiles(
+    project: Path,
+    cfg: list[str],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    annotate(cfg, project, {"p002.1": {"speaker": "bruno"}, "p003.1": {"speaker": "anna"}})
+
+    async def profiles(_settings: object) -> set[str]:
+        return {"narratore", "bruno"}
+
+    monkeypatch.setattr(commands, "list_profile_ids", profiles)
+    capsys.readouterr()
+    assert run(cfg, project, "cast") == 0
+    captured = capsys.readouterr()
+    data = yaml.safe_load(captured.out)
+    assert data["narrator"] == "narratore"
+    assert list(data["characters"]) == ["narratore", "bruno", "anna"]
+    assert "missing voice: clone:anna (voxello voice record anna)" in captured.err
+    assert not (project / "cast.yaml").exists()
+
+
+def test_cast_write_refuses_to_replace_without_force(
+    project: Path,
+    cfg: list[str],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    annotate(cfg, project, {"p003.1": {"speaker": "anna", "register": "whisper"}})
+
+    async def no_server(_settings: object) -> None:
+        return None
+
+    monkeypatch.setattr(commands, "list_profile_ids", no_server)
+    assert run(cfg, project, "cast", "--write", "-l", "en") == 0
+    data = yaml.safe_load((project / "cast.yaml").read_text())
+    assert data["narrator"] == "narrator"
+    assert data["language"] == "en"
+    captured = capsys.readouterr()
+    assert "warning: 1 speech segments have no speaker yet" in captured.err  # p002.1
+    assert run(cfg, project, "cast", "--write") == 1
+    assert "--force" in capsys.readouterr().err
+    assert run(cfg, project, "cast", "--write", "--force", "--narrator", "voce") == 0
+    assert yaml.safe_load((project / "cast.yaml").read_text())["narrator"] == "voce"
+
+
+def test_cast_reports_missing_registers_and_rejects_bad_narrators(
+    project: Path,
+    cfg: list[str],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    annotate(
+        cfg,
+        project,
+        {"p002.1": {"speaker": "bruno"}, "p003.1": {"speaker": "anna", "register": "whisper"}},
+    )
+
+    async def profiles(_settings: object) -> set[str]:
+        return {"narratore", "bruno", "anna"}
+
+    monkeypatch.setattr(commands, "list_profile_ids", profiles)
+    capsys.readouterr()
+    assert run(cfg, project, "cast") == 0
+    err = capsys.readouterr().err
+    assert "missing register: clone:anna-whisper" in err
+    assert "--register whisper" in err
+    assert run(cfg, project, "cast", "--narrator", "Il Narratore") == 1
+    assert "invalid_parameter" in capsys.readouterr().err
+
+
+async def test_list_profile_ids_reads_the_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    from voxello.config import Settings
+    from voxello.errors import TTS_PROVIDER_UNAVAILABLE, VoxelloError
+    from voxello.tts.base import VoiceProfile
+
+    class Store:
+        closed = 0
+        fail = False
+
+        def __init__(self, _settings: object) -> None:
+            pass
+
+        async def list_voice_profiles(self) -> list[VoiceProfile]:
+            if Store.fail:
+                raise VoxelloError(TTS_PROVIDER_UNAVAILABLE, "down")
+            return [VoiceProfile("anna"), VoiceProfile("anna-sad")]
+
+        async def aclose(self) -> None:
+            Store.closed += 1
+
+    monkeypatch.setattr("voxello.tts.voicestudio.VoiceStudioProvider", Store)
+    assert await commands.list_profile_ids(Settings()) == {"anna", "anna-sad"}
+    Store.fail = True
+    assert await commands.list_profile_ids(Settings()) is None
+    assert Store.closed == 2
+
+
+def test_status_prints_the_next_command(
+    project: Path, cfg: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert run(cfg, project, "status") == 0
+    out = capsys.readouterr().out
+    assert "Segments   5 (2 speech, 2 without a speaker)" in out
+    assert f"Next       voxello dialogue segments -p {project} --pending" in out

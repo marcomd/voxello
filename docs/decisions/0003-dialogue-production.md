@@ -1,6 +1,6 @@
 # 0003 — Multi-character dialogue: an agent annotates, Voxello renders deterministically
 
-Status: proposed, 2026-11-21
+Status: accepted, 2026-11-21; implemented in roadmap 8.1-8.7 (2026-11-23)
 
 ## Context
 

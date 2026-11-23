@@ -39,6 +39,20 @@ change the MCP tool signatures or the configuration layout.
   Every action is saved in `state.json` before the next key, and review resumes where it
   stopped. Takes are flagged for a speaking rate far from the speaker's usual one, clipping,
   long leading or trailing silence and near-silent audio; `--flagged` reviews those first.
+- The `voice-dialogue` skill (roadmap 8.7), installed by `voxello install claude` and
+  `voxello install codex` next to `voice-notify`, lets Claude Code or Codex turn a text into a
+  dialogue project: it annotates speakers, registers, tags and attributions in chunks, drafts
+  the cast and asks you about missing voices, checks and renders, and hands you the commands
+  that need your terminal (`voice record`, `review`, `play`, `export`).
+- `voxello dialogue cast [--write] [--force] [--narrator NAME] [-l LANG]` drafts `cast.yaml`:
+  the narrator and every annotated speaker, each with the cloned voice of the same name and
+  the registers found on the server as `<name>-<register>`, a `speech.voice_designs` name as a
+  design, and `TODO` comments with the `voxello voice record` command for voices and
+  registers that are missing.
+- `voxello dialogue status` prints a project's segments, cast, check result, rendered and
+  approved lines, and the next command to run.
+- `voxello dialogue annotate --help` documents the annotation fields, the allowed tags and an
+  example.
 - `voxello dialogue play [--from ID]` (roadmap 8.6) plays the scene line by line with the
   cast's pauses, printing the line being played; takes not approved yet are marked and lines
   without a take are skipped. Ctrl-C stops and offers to open `review` at that line.

@@ -349,7 +349,7 @@ def build_parser() -> argparse.ArgumentParser:
     claude.add_argument(
         "--yes", "-y", action="store_true", help="Register the hook in settings.json without asking"
     )
-    claude.add_argument("--no-skill", action="store_true", help="Do not install the skill")
+    claude.add_argument("--no-skill", action="store_true", help="Do not install the skills")
     claude.add_argument("--no-hook", action="store_true", help="Do not install the hook")
     claude.add_argument(
         "--lang",
@@ -384,7 +384,7 @@ def build_parser() -> argparse.ArgumentParser:
     codex.add_argument(
         "--yes", "-y", action="store_true", help="Register the hook in hooks.json without asking"
     )
-    codex.add_argument("--no-skill", action="store_true", help="Do not install the skill")
+    codex.add_argument("--no-skill", action="store_true", help="Do not install the skills")
     codex.add_argument("--no-hook", action="store_true", help="Do not install the hook")
     return parser
 
@@ -1427,8 +1427,9 @@ def cmd_install_claude(args: argparse.Namespace) -> int:
     claude_dir = (args.claude_dir or install.default_claude_dir()).expanduser()
     print(f"Claude Code directory: {claude_dir}")
     if not args.no_skill:
-        skill = install.install_skill(claude_dir)
-        print(f"Skill voice-notify: {skill.status} ({skill.path})")
+        for name in install.SKILL_NAMES:
+            skill = install.install_skill(claude_dir, name)
+            print(f"Skill {name}: {skill.status} ({skill.path})")
     if args.no_hook:
         return 0
 
@@ -1457,8 +1458,9 @@ def cmd_install_codex(args: argparse.Namespace) -> int:
     codex_dir = (args.codex_dir or install.default_codex_dir()).expanduser()
     print(f"Codex home: {codex_dir}")
     if not args.no_skill:
-        skill = install.install_skill(codex_dir)
-        print(f"Skill voice-notify: {skill.status} ({skill.path})")
+        for name in install.SKILL_NAMES:
+            skill = install.install_skill(codex_dir, name)
+            print(f"Skill {name}: {skill.status} ({skill.path})")
     if not args.no_hook:
         hook = install.install_hook(codex_dir)
         print(f"Hook script: {hook.status} ({hook.path})")
