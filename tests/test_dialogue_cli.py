@@ -478,3 +478,159 @@ async def test_console_terminal_waits_for_a_key(pty_terminal) -> None:  # type: 
     loop = asyncio.get_running_loop()
     loop.call_later(0.1, os.write, master, b"\r")
     assert await asyncio.wait_for(terminal.key(), 2) == "enter"
+
+
+# --- play and export (roadmap 8.6) -------------------------------------------------------------
+
+
+class InstantPlayer:
+    """Every take ends at once; ``interrupt_at`` raises Ctrl-C when that take starts."""
+
+    name = "instant"
+
+    def __init__(self, interrupt_at: str | None = None) -> None:
+        self.interrupt_at = interrupt_at
+        self.paths: list[Path] = []
+
+    async def play(self, path: Path):  # type: ignore[no-untyped-def]
+        from .conftest import FakeHandle
+
+        if path.parent.name == self.interrupt_at:
+            raise KeyboardInterrupt
+        self.paths.append(path)
+        handle = FakeHandle(path)
+        handle.finish()
+        return handle
+
+
+@pytest.fixture
+def rendered_project(
+    review_project: Path, cfg: list[str], capsys: pytest.CaptureFixture[str]
+) -> Path:
+    assert run(cfg, review_project, "render") == 0
+    # pauses are not part of a take; without them `play` does not sleep in these tests
+    cast = {
+        **CAST,
+        "pauses_ms": dict.fromkeys(("same_speaker", "speaker_change", "paragraph", "break"), 0),
+    }
+    (review_project / "cast.yaml").write_text(yaml.safe_dump(cast), encoding="utf-8")
+    capsys.readouterr()
+    return review_project
+
+
+def test_play_prints_each_line_and_a_summary(
+    rendered_project: Path,
+    cfg: list[str],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    player = InstantPlayer()
+    monkeypatch.setattr(commands, "make_player", lambda _settings: player)
+    import shutil
+
+    shutil.rmtree(rendered_project / "takes" / "p003.2")
+    assert run(cfg, rendered_project, "play", "--from", "p002.1") == 0
+    out = capsys.readouterr().out
+    assert "[2/5] p002.1  BRUNO  Porto fuori il cane.  (not approved)" in out
+    assert "[5/5] p003.2  no take: render it first" in out
+    assert "Played 3 lines (3 not approved, 1 without a take)." in out
+    assert [p.parent.name for p in player.paths] == ["p002.1", "p002.2", "p003.1"]
+
+
+def test_play_interrupted_offers_review_at_that_line(
+    rendered_project: Path,
+    cfg: list[str],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from .conftest import FakePlayer
+
+    players = [InstantPlayer("p002.2"), FakePlayer()]  # play, then review
+    monkeypatch.setattr(commands, "make_player", lambda _settings: players.pop(0))
+    monkeypatch.setattr(commands, "ask", lambda _prompt: "y")
+    keys = Keys(["q"])
+    monkeypatch.setattr(commands, "make_review_terminal", lambda _work: keys)
+    assert run(cfg, rendered_project, "play") == 0
+    assert "Stopped at p002.2." in capsys.readouterr().out
+    assert keys.out[0].startswith("[3/5] p002.2")
+
+
+def test_play_interrupted_without_review(
+    rendered_project: Path,
+    cfg: list[str],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(commands, "make_player", lambda _settings: InstantPlayer("p002.2"))
+    monkeypatch.setattr(commands, "ask", lambda _prompt: "")
+    assert run(cfg, rendered_project, "play") == 130
+    resume = capsys.readouterr().out.split("Review it with: ", 1)[1].strip()
+    assert shlex.split(resume) == [
+        "voxello",
+        "dialogue",
+        "review",
+        "-p",
+        str(rendered_project),
+        "--from",
+        "p002.2",
+    ]
+
+
+def test_play_interrupted_before_the_first_line(
+    rendered_project: Path, cfg: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def interrupted(_self: object, _start: object) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(commands.PlayThrough, "run", interrupted)
+    assert run(cfg, rendered_project, "play") == 130
+
+
+def test_ask_treats_end_of_input_as_no(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def eof(_prompt: str) -> str:
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", eof)
+    assert commands.ask("? ") == ""
+    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+    assert commands.ask("? ") == "y"
+
+
+def test_export_refuses_unapproved_lines(
+    rendered_project: Path, cfg: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert run(cfg, rendered_project, "export") == 1
+    err = capsys.readouterr().err
+    assert "dialogue_not_ready" in err
+    assert "5 lines have no approved take" in err
+    assert not (rendered_project / "final.wav").exists()
+
+
+def test_export_writes_the_files(
+    rendered_project: Path, cfg: list[str], capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    output = tmp_path / "book.wav"
+    args = ["export", "-o", str(output), "--srt", "--allow-unapproved", "--no-level"]
+    assert run(cfg, rendered_project, *args) == 0
+    captured = capsys.readouterr()
+    assert "warning: 5 lines not approved" in captured.err
+    assert f"Exported 5 lines (2.5 s) to {output}" in captured.out  # 5 takes of 0.5 s
+    assert f"Timeline: {tmp_path / 'book.timeline.json'}" in captured.out
+    assert f"Subtitles: {tmp_path / 'book.srt'}" in captured.out
+    assert output.is_file()
+
+
+def test_export_approved_lines_without_subtitles(
+    rendered_project: Path, cfg: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    state = json.loads((rendered_project / "state.json").read_text())
+    for line in state["lines"].values():
+        line["approved"] = line["takes"][-1]["fingerprint"]
+    (rendered_project / "state.json").write_text(json.dumps(state))
+    assert run(cfg, rendered_project, "export") == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "Subtitles" not in captured.out
+    assert (rendered_project / "final.wav").is_file()

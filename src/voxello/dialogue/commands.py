@@ -1,9 +1,10 @@
-"""``voxello dialogue ...``: the terminal side of dialogue production (roadmap 8.3-8.5).
+"""``voxello dialogue ...``: the terminal side of dialogue production (roadmap 8.3-8.6).
 
 The commands are thin: files and rules live in ``project``/``script``/``render``, review in
-``review``/``review_session``. Output for the agent (``segments``) is one segment per line,
-ids first, so it can be read in chunks. ``review`` reads single keys from the terminal (cbreak
-mode on POSIX, so Ctrl-C still interrupts; ``msvcrt`` on Windows).
+``review``/``review_session``, play-through and export in ``play``/``export``. Output for
+the agent (``segments``) is one segment per line, ids first, so it can be read in chunks.
+``review`` reads single keys from the terminal (cbreak mode on POSIX, so Ctrl-C still
+interrupts; ``msvcrt`` on Windows).
 """
 
 from __future__ import annotations
@@ -24,6 +25,8 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import yaml
 
+from voxello.dialogue.export import export
+from voxello.dialogue.play import PlayThrough
 from voxello.dialogue.project import LineDefaults, Project
 from voxello.dialogue.render import RenderEvent, render
 from voxello.dialogue.review import normalize_key
@@ -115,6 +118,40 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
         "--flagged", action="store_true", help="Lines with QA flags first, then the others"
     )
 
+    play = dsub.add_parser(
+        "play",
+        parents=[project],
+        help="Play the scene line by line with the cast's pauses",
+        description=(
+            "Plays each line's approved take (or its chosen take, marked) with the pauses of "
+            "cast.yaml, printing the line being played. Ctrl-C stops and offers to open "
+            "review at that line."
+        ),
+    )
+    play.add_argument("--from", dest="start", help="Start at this segment id")
+
+    export_parser = dsub.add_parser(
+        "export",
+        parents=[project],
+        help="Join the approved takes into one WAV, with a timeline and optional subtitles",
+    )
+    export_parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        help="WAV to write (default: PROJECT/final.wav); NAME.timeline.json and NAME.srt go "
+        "next to it",
+    )
+    export_parser.add_argument("--srt", action="store_true", help="Also write SRT subtitles")
+    export_parser.add_argument(
+        "--allow-unapproved",
+        action="store_true",
+        help="Export the chosen take of lines not approved yet instead of refusing",
+    )
+    export_parser.add_argument(
+        "--no-level", action="store_true", help="Keep each take's loudness as rendered"
+    )
+
 
 def _add_window(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--from", dest="start", help="First segment id")
@@ -137,12 +174,20 @@ def run(settings: Settings, args: argparse.Namespace) -> int:
     if command == "stats":
         return cmd_stats(project)
     if command == "review":
-        try:
-            return asyncio.run(cmd_review(project, settings, args))
-        except KeyboardInterrupt:
-            print(f"\n{_saved_at(project.load_state().review.position)}")
-            return 130
+        return _run_review(project, settings, args)
+    if command == "play":
+        return cmd_play(project, settings, args)
+    if command == "export":
+        return cmd_export(project, settings, args)
     return asyncio.run(cmd_render(project, settings, args))
+
+
+def _run_review(project: Project, settings: Settings, args: argparse.Namespace) -> int:
+    try:
+        return asyncio.run(cmd_review(project, settings, args))
+    except KeyboardInterrupt:
+        print(f"\n{_saved_at(project.load_state().review.position)}")
+        return 130
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -339,6 +384,68 @@ async def cmd_review(project: Project, settings: Settings, args: argparse.Namesp
         await provider.aclose()
     print(_review_summary(project, summary))
     return 130 if summary.interrupted else 0
+
+
+def cmd_play(project: Project, settings: Settings, args: argparse.Namespace) -> int:
+    session = PlayThrough(
+        project,
+        make_player(settings),
+        lambda text: print(text, flush=True),
+        defaults=_defaults(settings),
+    )
+    try:
+        summary = asyncio.run(session.run(args.start))
+    except KeyboardInterrupt:
+        print()
+        sid = session.current
+        if sid is None:
+            return 130
+        print(f"Stopped at {sid}.")
+        if stdin_is_tty() and ask(f"Open review at {sid}? [y/N] ").strip().lower() in ("y", "s"):
+            review = argparse.Namespace(start=sid, pending=False, flagged=False)
+            return _run_review(project, settings, review)
+        root = shlex.quote(str(project.root))
+        print(f"Review it with: voxello dialogue review -p {root} --from {sid}")
+        return 130
+    details = []
+    if summary.unapproved:
+        details.append(f"{summary.unapproved} not approved")
+    if summary.skipped:
+        details.append(f"{summary.skipped} without a take")
+    extra = f" ({', '.join(details)})" if details else ""
+    print(f"Played {summary.played} line{'s' if summary.played != 1 else ''}{extra}.")
+    return 0
+
+
+def ask(prompt: str) -> str:
+    try:
+        return input(prompt)
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return ""
+
+
+def cmd_export(project: Project, settings: Settings, args: argparse.Namespace) -> int:
+    result = export(
+        project,
+        args.output,
+        defaults=_defaults(settings),
+        allow_unapproved=args.allow_unapproved,
+        srt=args.srt,
+        level=not args.no_level,
+    )
+    if result.unapproved:
+        plural = "s" if result.unapproved != 1 else ""
+        print(
+            f"warning: {result.unapproved} line{plural} not approved, exported with the "
+            "chosen take.",
+            file=sys.stderr,
+        )
+    print(f"Exported {result.lines} lines ({result.duration_ms / 1000:.1f} s) to {result.wav}")
+    print(f"Timeline: {result.timeline}")
+    if result.srt is not None:
+        print(f"Subtitles: {result.srt}")
+    return 0
 
 
 def _review_summary(project: Project, summary: ReviewSummary) -> str:

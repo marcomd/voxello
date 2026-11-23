@@ -61,6 +61,15 @@ class Line:
     request: LineRequest
 
 
+@dataclass(frozen=True)
+class Pick:
+    """The take a play-through or an export uses for a line."""
+
+    line: Line
+    take: Take | None  # the approved take if it is current, else the chosen current one
+    approved: bool
+
+
 def write_atomic(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
@@ -175,6 +184,18 @@ class Project:
 
     def has_audio(self, segment_id: str, take: Take) -> bool:
         return self.take_path(segment_id, take.fingerprint).is_file()
+
+    def pick(self, state: State, line: Line) -> Pick:
+        entry = state.lines.get(line.segment_id)
+        if entry is None:
+            return Pick(line, None, approved=False)
+        current = [
+            t for t in entry.current_takes(line.request) if self.has_audio(line.segment_id, t)
+        ]
+        approved = next((t for t in current if t.fingerprint == entry.approved), None)
+        if approved is not None:
+            return Pick(line, approved, approved=True)
+        return Pick(line, entry.chosen(current), approved=False)
 
     def ensure_measures(self, segment_id: str, take: Take) -> bool:
         """Measure a take stored without (or with outdated) measures; True if ``take`` changed."""

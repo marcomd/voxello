@@ -21,6 +21,7 @@ INVALID_REFERENCE_AUDIO = "invalid_reference_audio"  # unusable reference audio 
 RECORDER_UNAVAILABLE = "recorder_unavailable"  # roadmap 8.2: no ffmpeg, platform or terminal
 RECORDING_FAILED = "recording_failed"  # the microphone capture or its cleanup failed
 INVALID_SCRIPT = "invalid_script"  # roadmap 8.3: a dialogue script, cast or annotation is invalid
+DIALOGUE_NOT_READY = "dialogue_not_ready"  # roadmap 8.6: lines without a current/approved take
 TTS_PROVIDER_UNAVAILABLE = "tts_provider_unavailable"
 TTS_PROVIDER_UNAUTHORIZED = "tts_provider_unauthorized"
 TTS_PROVIDER_ERROR = "tts_provider_error"

@@ -83,5 +83,25 @@ assign speech to `narratore` too. Then run `check`, `show` and `stats` to verify
 followed by `render` and `review`. Rendering skips current takes and can resume after an
 interruption; review can also render missing takes as you reach them.
 
-Each line's audio is kept in the project directory. Whole-chapter playback and export are
-planned in roadmap 8.6; this workflow currently produces and approves individual takes.
+Each line's audio is kept in the project directory.
+
+## Play the scene and export it
+
+```bash
+uv run voxello dialogue play -p tmp/example2-review            # or --from p012.1
+uv run voxello dialogue export -p tmp/example2-review --srt
+```
+
+`play` plays every line with the pauses of `cast.yaml` and prints the line being played.
+Lines not approved yet play their chosen take and are marked `(not approved)`; lines without
+a take are skipped. Press Ctrl-C to stop: Voxello offers to open review at that line, and
+after review you can run `play --from` the same id.
+
+`export` writes `final.wav`, `final.timeline.json` and, with `--srt`, `final.srt` in the
+project directory (`-o book/chapter1.wav` writes `chapter1.wav`, `chapter1.timeline.json`
+and `chapter1.srt` there instead). It refuses while a line has no current take (run
+`render`) or no approval (run `review --pending`); `--allow-unapproved` exports the chosen
+takes anyway. Each line's loudness is brought to the same level, which mostly lifts short
+lines such as "chiese Francesca." that the model renders quietly; whispered lines are
+lifted too, so pass `--no-level` to keep the takes exactly as rendered. Subtitles show the
+source words without quote marks or tags, in blocks of at most two rows.
