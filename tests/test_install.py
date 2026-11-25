@@ -25,9 +25,12 @@ def claude_dir(tmp_path: Path) -> Path:
 def test_repo_copies_match_package_assets():
     """`.claude/` keeps mirror copies for the checkout; they must not drift."""
     pairs = [
-        (
-            REPO / ".claude" / "skills" / "voice-notify" / "SKILL.md",
-            PACKAGE_ASSETS / "skills" / "voice-notify" / "SKILL.md",
+        *(
+            (
+                REPO / ".claude" / "skills" / name / "SKILL.md",
+                PACKAGE_ASSETS / "skills" / name / "SKILL.md",
+            )
+            for name in install.SKILL_NAMES
         ),
         (
             REPO / ".claude" / "hooks" / "voxello-notification-hook.sh",
@@ -55,6 +58,11 @@ def test_install_skill_and_hook(claude_dir: Path):
         assert hook.path.stat().st_mode & stat.S_IXUSR
 
     assert install.install_skill(claude_dir).status == "unchanged"
+    dialogue = install.install_skill(claude_dir, "voice-dialogue")
+    assert dialogue.path == claude_dir / "skills" / "voice-dialogue" / "SKILL.md"
+    assert dialogue.path.read_bytes() == install.asset_bytes(
+        "claude", "skills", "voice-dialogue", "SKILL.md"
+    )
     hook.path.write_text("#!/bin/sh\necho old\n")
     assert install.install_hook(claude_dir).status == "updated"
 
@@ -67,6 +75,8 @@ def test_cli_does_not_touch_settings_without_yes(
     out = capsys.readouterr().out
     assert not (claude_dir / "settings.json").exists()
     assert (claude_dir / "skills" / "voice-notify" / "SKILL.md").is_file()
+    assert (claude_dir / "skills" / "voice-dialogue" / "SKILL.md").is_file()
+    assert "Skill voice-dialogue: installed" in out
     assert (claude_dir / "hooks" / "voxello-notification-hook.sh").is_file()
     assert '"Notification"' in out
     assert "--yes" in out
@@ -192,6 +202,9 @@ def test_install_codex_copies_skill_and_hook_and_offers_hooks_json(
     out = capsys.readouterr().out
     assert (codex_dir / "skills" / "voice-notify" / "SKILL.md").read_bytes() == (
         install.asset_bytes("claude", "skills", "voice-notify", "SKILL.md")
+    )
+    assert (codex_dir / "skills" / "voice-dialogue" / "SKILL.md").read_bytes() == (
+        install.asset_bytes("claude", "skills", "voice-dialogue", "SKILL.md")
     )
     assert (codex_dir / "hooks" / HOOK_NAME).is_file()
     assert not (codex_dir / "hooks.json").exists(), "never written without consent"

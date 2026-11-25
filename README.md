@@ -1,19 +1,32 @@
 # Voxello
 
-**A local voice and notification layer for AI agents.**
+**Give your AI a voice — from spoken updates to podcast-style dialogues.**
 
 ![cover.jpeg](docs/cover.jpeg)
 
-Voxello is a small MCP server that lets Claude Code, Codex, Cursor and other MCP clients
-`speak`, `notify`, `stop_speaking` and `get_status`. It sends text to a local TTS server
-(VoiceStudio, or the headless `omnivoice-server`, both running OmniVoice), plays the audio on
-your speaker, shows desktop notifications, and cleans up after itself. The agent decides *what* to say; Voxello
-handles *how* it is delivered.
+Voxello gives your AI agent a voice on your machine. Start with a simple spoken alert, hear a
+summary of the work it just did, or produce a complete audio file from a long text. The agent
+decides *what* to say; Voxello handles *how* it is delivered.
 
-```
-Agent ──MCP──▶ Voxello ──HTTP──▶ VoiceStudio / omnivoice-server ──▶ WAV ──▶ afplay / mpv / PowerShell
-                  └──▶ desktop notification, saved file
-```
+## Three ways to use Voxello
+
+1. **Reusable voice notifications.** Hear a fixed phrase when your agent finishes or needs
+   your attention. Voxello generates the audio once and replays it from a cache on subsequent
+   alerts, without asking the speech server to generate it again while that entry is cached.
+   [Try a cached phrase](#1-hear-a-cached-phrase).
+2. **Spoken summaries of the work just completed.** Your agent writes a short summary of what
+   it did, including results or problems. Voxello generates fresh audio and reads it to you at
+   the end of the task. [Try a live summary](#2-hear-your-agent-summarize-a-task).
+3. **Finished audio from long texts and dialogues.** Voxello renders the text piece by piece,
+   lets you review or regenerate individual lines, and exports one complete audio file. Use a
+   single narrator or assign different voices to the speakers: the cast has no preset limit
+   on its number of characters. Narrate a chapter or listen to a prepared meeting summary
+   like a podcast. [Try a dialogue](#3-produce-a-dialogue-with-several-voices).
+
+All three modes can use your own cloned voice, other voice profiles or designed voices
+([voice setup](#cloned-and-designed-voices)). Voice cloning and design need omnivoice-server.
+For summaries, the agent writes the words; for dialogue, you supply a script or ask your AI
+to write one first. Voxello turns that text into audio.
 
 ## Requirements
 
@@ -62,16 +75,144 @@ voxello config init        # writes ~/Library/Application Support/voxello/config
 voxello config path        # shows where the file lives on this OS
 ```
 
-Minimal intranet setup with `omnivoice-server`:
+Minimal setup with `omnivoice-server` on this machine:
 
 ```yaml
 tts:
   voicestudio:
-    base_url: http://192.168.1.144:8880
+    base_url: http://localhost:8880
     # voice: alloy          # omit for the server default; presets: alloy, ash, ballad, cedar, coral, echo, fable, marin, nova, onyx, sage, shimmer, verse
 speech:
   default_language: it      # used when a request does not pass `language`
 ```
+
+If the server runs on another machine, replace `localhost` with its intranet address, for
+example `192.168.1.144`. Then check the connection and your audio player:
+
+```bash
+voxello doctor
+```
+
+## Try the three modes
+
+These examples use English audio. Start with Voxello installed, the TTS server running and
+the configuration above. Run terminal commands yourself; in a checkout, prefix `voxello`
+with `uv run`.
+
+### 1. Hear a cached phrase
+
+No AI agent is needed for this first test. With the default cache settings, run the same
+command twice:
+
+```bash
+voxello speak "Your agent needs your attention." --cache -l en
+voxello speak "Your agent needs your attention." --cache -l en
+voxello cache list
+```
+
+**What to expect:** you hear the same phrase twice. The first command reports `"cached": false`
+and the second `"cached": true` in its JSON output (if the phrase was already cached, both
+report `true`). The second call reuses the audio instead of synthesizing it again;
+`cache list` shows the stored entry. Changing the text, voice or synthesis settings selects
+a different cache entry.
+
+This is the same audio cache used by static agent notifications. To hear those phrases when
+your agent finishes or needs you, follow
+[Voice notifications for Claude Code and Codex](#voice-notifications-for-claude-code-and-codex).
+You can pre-generate the built-in phrases with `voxello cache warm --hook-phrases -l en`.
+
+**Try your own voice:** [clone a short recording](#cloned-and-designed-voices), then add
+`--voice clone:my-voice` to both `speak` commands, replacing `my-voice` with your profile name.
+The first call generates that phrase in your voice; the next reuses it.
+
+### 2. Hear your agent summarize a task
+
+This test needs an AI client with [Voxello registered](#register-with-your-agent). Open a
+project containing a README and ask the agent:
+
+> Read README.md and identify what this project does and how to run it. Do not change any
+> files. When you finish, use Voxello to read me a two-sentence summary of what you learned,
+> in English.
+
+**What to expect:** the agent reads the file, answers in text and delivers a spoken summary
+about that project's actual contents. The summary is written by the agent and synthesized
+for this task, rather than replaying a fixed "work completed" phrase. The same approach works
+after running tests, fixing a bug or investigating a failure: ask for the result by voice.
+
+To receive a spoken summary at the end of tasks without asking each time, see
+[notification setup](#set-it-up) and the `summaries.mode: always` option.
+
+### 3. Produce a dialogue with several voices
+
+This test needs an agent with the `voice-dialogue` skill. Install it for your client:
+
+```bash
+voxello install claude    # for Claude Code
+# or:
+voxello install codex    # for Codex
+```
+
+Run one of these commands for your client and follow its installation prompts. Create a new
+working folder, then save this sample as `dialogue-demo.txt` inside it:
+
+```text
+The team has finished a short planning meeting. Anna and Bruno review the outcome.
+
+"What did we decide today?" asked Anna.
+
+"We will release the small update first," replied Bruno.
+
+"What is included?" asked Anna.
+
+"The new search page and the keyboard shortcuts," said Bruno.
+
+"Who will test them?" asked Anna.
+
+"I will run the checks tomorrow," replied Bruno.
+
+"And I will update the guide," said Anna.
+
+"Then we can review the results on Friday," said Bruno.
+
+"What is still open?" asked Anna.
+
+"The release date. We will choose it after the review," replied Bruno.
+
+The next steps are clear. The release date remains undecided.
+```
+
+Open your agent in that folder and ask:
+
+> Use voice-dialogue to produce English audio from dialogue-demo.txt, with a narrator and
+> distinct voices for Anna and Bruno. Create the project in dialogue-demo. Help me choose
+> three available voice profiles; if any are missing, guide me through preparing them.
+> Preserve the script's words, render the audio and give me the commands to review and export it.
+
+The skill prepares the speakers and voices with you, then generates the audio line by line.
+Voice profiles must exist on your TTS server; use `voxello voice list` to see them. The agent
+can help you select profiles or explain how to record your own in your terminal
+([voice recording guide](docs/recording-voices.md)).
+
+When rendering is complete, run these commands in your own terminal:
+
+```bash
+voxello dialogue review -p dialogue-demo
+voxello dialogue play -p dialogue-demo
+voxello dialogue export -p dialogue-demo --srt
+```
+
+**What to expect:** during review, you hear each line in its assigned voice. Press Enter to
+approve and continue, `p` to replay, or `r` to generate another take of just that line. You can
+quit with `q` and resume later. Approve every line before exporting. `play` lets you hear the
+whole scene with pauses; export creates `dialogue-demo/final.wav`, a timeline and subtitles.
+The WAV is the complete audio, ready to listen to later.
+
+The same workflow handles longer texts, a single narrator or a larger cast, with no preset
+cap on the number of characters. For a meeting recap, ask your AI to write a summary dialogue
+from the transcript first, then give that script to `voice-dialogue`. See
+[dialogue details and future ideas](#review-a-narrated-text-or-dialogue).
+
+## Configuration reference
 
 With VoiceStudio on another host:
 
@@ -207,7 +348,7 @@ Environment variables override the file: `VOXELLO_VOICESTUDIO_URL`, `VOXELLO_VOI
 `voxello doctor` prints which config file it read and where it came from (`--config`,
 `VOXELLO_CONFIG` or the OS default), plus which executable and Python interpreter are running.
 
-## Try it without an agent
+## More CLI examples
 
 ```bash
 voxello doctor                                  # provider reachable? voices per language? player? notifier?
@@ -228,11 +369,43 @@ voxello speak "Fatto." --voice clone:marco      # a voice cloned with `voxello v
 
 ## Review a narrated text or dialogue
 
-`voxello dialogue` splits a UTF-8 text into lines, renders a take for each voice in
-`cast.yaml`, and lets you review them in your terminal. Approve with Enter, regenerate with
+Dialogue extends Voxello's voice beyond short updates: turn a prepared script into audio with
+distinct voices and pauses, and listen to it like a podcast. For example, have your AI turn a
+meeting transcript into a structured conversation about the key points, decisions and next
+steps, then listen to that summary when you have time. A narrated story or chapter can use the
+same workflow, with a narrator and character voices. A project can also use a single narrator;
+there is no preset limit on the number of characters in the cast. Start with the
+[complete local example](#3-produce-a-dialogue-with-several-voices) above.
+
+### Prepare the script
+
+Today, you prepare the dialogue yourself or ask your AI to write it first. For example:
+
+> Read meeting-transcript.txt and write a concise conversation between two hosts covering the
+> main topics, decisions and next steps. Stay faithful to the transcript and save the dialogue
+> in meeting-summary.txt.
+
+Then ask the agent to produce the audio:
+
+> Use voice-dialogue to turn meeting-summary.txt into audio with a different voice for each host.
+
+The `voice-dialogue` skill (installed by `voxello install claude` or `voxello install codex`)
+starts from an existing UTF-8 text. It annotates who speaks, helps you choose the voices, renders
+the lines and hands you the review, play and export commands. The skill preserves the script's
+words; summarizing sources and writing a new conversation are a separate step you request from
+your AI.
+
+### Produce, review and export
+
+`voxello dialogue` splits the script into lines and renders a take for each voice in
+`cast.yaml`. `voxello dialogue cast` drafts that file from the annotated speakers and your
+cloned voices, and `voxello dialogue status` tells you the next command at any point.
+
+Review the audio in your own terminal. Approve with Enter, regenerate with
 `r`, pick a take with `1`-`9`, replay with `p`, listen in context with `c`, edit with `e`,
 change register with `g`, or adjust speed with `+`/`-`. Quit with `q` and resume later;
-approvals, take selections and the review position are saved after each action.
+approvals, take selections and the review position are saved after each action. The project
+directory keeps the source text, audio takes and exported files so you can return to them.
 
 When every line is approved, `voxello dialogue play` plays the whole scene with the cast's
 pauses (Ctrl-C jumps into review at the line you stopped on) and `voxello dialogue export`
@@ -240,6 +413,16 @@ writes `final.wav` with evened loudness, a timeline and, with `--srt`, subtitles
 
 See [the review walkthrough](docs/dialogue-review.md) for a short test with a cloned narrator
 and the workflow for a chapter or an existing sample file.
+
+### Future exploration
+
+We are exploring a workflow in which the agent reads meeting transcripts or other sources,
+suggests topics and writes the dialogue before handing it to `voice-dialogue`. Ideas include a
+target listening duration, a choice of topics and an editorial approach: an explanatory
+overview, a debate, a critique looking for weaknesses, or a discussion highlighting strengths.
+Source references and script review would help keep the result faithful to the material.
+These are ideas for future development, with no scheduled implementation; see the
+[roadmap discussion points](docs/roadmap.md#future-exploration--from-sources-to-podcast-style-dialogues).
 
 ## Register with your agent
 
@@ -436,7 +619,9 @@ does that for you. Review or disable the Claude Code hooks with `/hooks`.
 **What gets installed.** The `voice-notify` skill (`~/.claude/skills/` or `~/.codex/skills/`)
 tells the agent how to write a spoken summary: one or two sentences, in your language, no code
 or paths, `priority: high` when it failed or is blocked, `cache: false`, voice left to the
-configuration. It can also be invoked explicitly with `/voice-notify`. The hook script
+configuration. It can also be invoked explicitly with `/voice-notify`. The `voice-dialogue`
+skill guides the agent through a multi-voice dialogue project (see
+[Review a narrated text or dialogue](#review-a-narrated-text-or-dialogue)). The hook script
 `voxello-notification-hook.sh` only finds the `voxello` command (on the PATH, in
 `~/.local/bin`, or `uv run --directory "$VOXELLO_REPO"` from a checkout) and hands it the event;
 when none is available it logs to stderr and exits without speaking. Adding a language for the
@@ -496,6 +681,19 @@ uv run voxello speak "Build completed. All tests pass."
 For everything else the tool install above is simpler: one `voxello` on the PATH, shared by every
 project and by the agents' MCP configuration. `voxello doctor` reports which mode is in use.
 
+## How it works
+
+Voxello sends text to a TTS server on your machine or intranet (VoiceStudio or the headless
+`omnivoice-server`, both running OmniVoice), plays audio through a local player and can show
+desktop notifications. Claude Code, Codex, Cursor and other MCP clients use the tools below
+for short messages. Dialogue projects use the CLI, guided by the `voice-dialogue` skill.
+
+```text
+Agent ──MCP tools──▶ Voxello ──HTTP──▶ TTS server ──▶ audio playback / saved file
+                       └──▶ desktop notification
+Agent ──skill + CLI──▶ Voxello dialogue ──▶ audio takes ──▶ review ──▶ final.wav
+```
+
 ## Tools
 
 | Tool            | Purpose                                                               | Key parameters                                                                            |
@@ -522,8 +720,8 @@ back as tool errors with a stable code: `tts_provider_unavailable`, `tts_provide
 
 - **Interrupt by default.** A new `speak` stops what is playing and clears the queue. Pass
   `interrupt: false` to queue instead (FIFO, `playback.max_queue_size` items).
-- **Short by design.** Text is capped at `limits.max_text_chars` (2000). Voice is for summaries
-  and status; the textual answer carries the details.
+- **Short MCP messages.** `speak` and `notify` text is capped at `limits.max_text_chars` (2000),
+  for summaries and status updates. Longer texts use the dialogue workflow, rendered line by line.
 - **Private by default.** Temporary audio lives in the OS cache directory with 0700 permissions,
   gets random names, and is deleted after playback and after `storage.temp_retention_minutes`.
   Logs record text length, not text, unless `logging.log_text: true`.

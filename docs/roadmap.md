@@ -506,7 +506,7 @@ As built:
   temporary sibling and moved last; nothing partial is left behind. Export is standard
   library only: example4 (39 lines, 5 min 28 s) exports in under a second.
 
-### 8.7 Skill, install and documentation
+### 8.7 Skill, install and documentation — done
 
 `src/voxello/assets/claude/skills/dialogue/SKILL.md`, installed by `voxello install claude`
 and `voxello install codex` next to `voice-notify` (mirror under `.claude/skills/` checked by
@@ -520,6 +520,60 @@ English), writes `cast.yaml`, runs `check` and `render`, and hands over to `revi
 and `export`. README section, TUTORIAL chapter, CLAUDE.md architecture lines, CHANGELOG.
 Licensing note: personal use; OmniVoice weights are CC-BY-NC and voices are cloned only with
 the speaker's consent.
+
+As built:
+
+- The skill is `voice-dialogue` (next to `voice-notify`, a name unlikely to clash in a
+  user's skills directory); `install.SKILL_NAMES` lists what `install claude|codex` copies,
+  and `tests/test_install.py` checks every mirror under `.claude/skills/`.
+- A first real run with Codex (example2, 2026-11-22) needed help because the formats lived
+  only in the docs, so three deterministic aids came with the skill:
+  - `dialogue cast [--write] [--force] [--narrator NAME] [-l LANG]` drafts a commented
+    `cast.yaml`: the narrator (default `narratore` for Italian, else `narrator`) and every
+    speaker by number of lines, `clone:<name>` for each, registers from the server's
+    `<name>-<register>` profiles, a `speech.voice_designs` name as a design. A missing voice
+    still points at `clone:<name>` with a `TODO` and the `voice record` command, so the cast
+    works unchanged once the voice is recorded; registers used by the annotation but not on
+    the server are listed with the command that records them. Without a server answer the
+    draft is written anyway, with a warning. On example2 the draft equals the hand-written
+    cast of the first test.
+  - `dialogue status` prints segments, cast, check, rendered and approved lines and the
+    first missing step as `Next` (annotate, cast, check, render, review, then play and
+    export; "done" when `final.wav` is newer than script, cast and state). Interactive steps
+    say to run them in the user's terminal.
+  - `dialogue annotate --help` documents the fields, the allowed tags and an example.
+- The README and `docs/dialogue-review.md` (a "Let your agent drive it" section) carry the
+  user documentation; `docs/TUTORIAL.md` stays about the TTS server.
+
+## Future exploration — From sources to podcast-style dialogues
+
+Ideas to investigate, inspired by NotebookLM's Audio Overviews. These are discussion points,
+not scheduled milestones or implemented features; scope, design and acceptance criteria remain
+to be defined.
+
+Voxello's purpose remains giving AI agents a voice. A possible extension is to let the agent
+prepare a structured summary and dialogue from sources, then use Voxello to produce audio for
+later listening. Today `voice-dialogue` starts from an existing script and preserves its words;
+it does not summarize sources or write a new conversation.
+
+- **From sources to a listening script.** Explore agent-driven dialogue generation from meeting
+  transcripts, notes and documents. For meetings, cover key points, decisions, action owners,
+  deadlines and open questions, so users can listen to a summary instead of the full recording.
+- **Duration and depth.** Let the user choose a target listening duration and level of detail;
+  investigate how to adapt the script and estimate its actual spoken length.
+- **Suggested topics and focus.** Have the agent propose topics after reading the sources, then
+  let the user select, prioritize or add the questions the dialogue should focus on.
+- **Editorial approach.** Explore an explanatory overview, a debate between viewpoints, a
+  critical review that looks for weaknesses and assumptions, or a discussion highlighting
+  strengths and benefits. The chosen approach should remain grounded in the sources and make
+  the agent's analysis distinguishable from reported facts.
+- **Faithfulness and review.** Keep references back to the sources; preserve uncertainty and
+  disagreements. Consider separate hosts who discuss the material without attributing invented
+  statements to meeting participants. Let the user review the summary and script before audio
+  production.
+- **Skill workflow.** Investigate a preparation skill or stage that hands the approved script
+  to `voice-dialogue`, keeping language work in the agent and audio production deterministic
+  in Voxello, consistent with [decision 0003](decisions/0003-dialogue-production.md).
 
 ## Recommended order
 
@@ -536,7 +590,7 @@ the speaker's consent.
 | 8 | 8.1, 8.2 | Done: per-request seed/speed; guided recording, useful on its own for better clones |
 | 9 | 8.3, 8.4 | Done: segments, annotation and reproducible takes; a dialogue renders end to end |
 | 10 | 8.5 | Done: review by ear with single keys, QA flags, resumable |
-| 11 | 8.6, 8.7 | 8.6 done: play-through and export; next the skill that drives it all |
+| 11 | 8.6, 8.7 | Done: play-through and export; the skill, cast draft and status that drive it |
 | 12 | Milestone 5 | On demand |
 
 Items 3.1 and 2.x were done before the first PyPI release (1.1) because they change the MCP

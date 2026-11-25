@@ -41,7 +41,8 @@ uv run voxello voice record NAME [--all | --register whisper] [--text T] [--no-k
 uv run voxello dialogue init chapter1.txt [DIR] [--max-chars 300]   # project dir + segments
 uv run voxello dialogue segments|show [-p DIR] [--from ID] [--count N] [--pending]
 uv run voxello dialogue annotate FILE|- [-p DIR]  # {id: {speaker, register, tts_text, ...}}
-uv run voxello dialogue check|stats [-p DIR]
+uv run voxello dialogue check|stats|status [-p DIR]   # status: where it stands, next command
+uv run voxello dialogue cast [-p DIR] [--write] [--force] [--narrator N] [-l en]   # draft cast.yaml
 uv run voxello dialogue render [-p DIR] [--lines A-B] [--force]   # needs cast.yaml
 uv run voxello dialogue review [-p DIR] [--from ID] [--pending] [--flagged]   # single keys, needs a TTY
 uv run voxello dialogue play [-p DIR] [--from ID]  # the scene with pauses; Ctrl-C offers review there
@@ -166,6 +167,11 @@ Layers, top to bottom, each depending only on the ones below:
   unapproved takes (`dialogue_not_ready`), evens loudness per line (speech-only RMS to
   `TARGET_DB`, bounded by `MAX_GAIN_DB` and `PEAK_CEILING`), and writes the WAV, a timeline
   built from the frames actually written and optional SRT, all through temporary siblings.
+  The agent side (8.7): `cast_draft.py` writes a commented cast from the annotated speakers
+  and the server's profile ids (`clone:<name>`, registers from `<name>-<register>`, a
+  missing voice still points at `clone:<name>` with a TODO); `status.py` returns the first
+  missing production step as `Step`s (`interactive` for review/play); `annotate --help`
+  documents the fields. The `voice-dialogue` skill drives the whole flow.
 - `notifications/desktop.py` picks `terminal-notifier`, `osascript`, `notify-send` or PowerShell.
   On Windows the toast needs Windows PowerShell 5.1 (`powershell`); `pwsh` is a playback-only
   fallback (`playback/backends.py`) because the WinRT projection is unavailable in PowerShell 7.
@@ -222,10 +228,11 @@ or a real TTS server belongs under `tests/integration/` with the `integration` m
 
 ## Claude Code integration shipped in the package
 
-The canonical skill and hook live in `src/voxello/assets/claude/` and ship in the wheel;
+The canonical skills (`install.SKILL_NAMES`: `voice-notify`, `voice-dialogue`) and hook live in
+`src/voxello/assets/claude/` and ship in the wheel;
 `voxello install claude` (`install.py`) copies them into `~/.claude` (or `$CLAUDE_CONFIG_DIR`) and
 only writes the hook entry into `settings.json` with `--yes` or an interactive confirmation.
-`.claude/skills/voice-notify/SKILL.md` and `.claude/hooks/voxello-notification-hook.sh` are
+`.claude/skills/<name>/SKILL.md` and `.claude/hooks/voxello-notification-hook.sh` are
 byte-identical mirrors for working inside this checkout; `tests/test_install.py` fails if they
 drift, so edit the package copy and re-copy. The skill makes Claude end a task with one `notify`
 call when the user asks to be told by voice, passing `language` consistent with the message. The

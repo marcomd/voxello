@@ -1,4 +1,4 @@
-"""``voxello dialogue ...``: the terminal side of dialogue production (roadmap 8.3-8.6).
+"""``voxello dialogue ...``: the terminal side of dialogue production (roadmap 8.3-8.7).
 
 The commands are thin: files and rules live in ``project``/``script``/``render``, review in
 ``review``/``review_session``, play-through and export in ``play``/``export``. Output for
@@ -18,6 +18,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import textwrap
 from collections import Counter
 from collections.abc import Mapping
 from pathlib import Path
@@ -25,13 +26,16 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import yaml
 
+from voxello.dialogue.cast import NAME_RE
+from voxello.dialogue.cast_draft import draft_cast
 from voxello.dialogue.export import export
 from voxello.dialogue.play import PlayThrough
-from voxello.dialogue.project import LineDefaults, Project
+from voxello.dialogue.project import LineDefaults, Project, write_atomic
 from voxello.dialogue.render import RenderEvent, render
 from voxello.dialogue.review import normalize_key
 from voxello.dialogue.review_session import ReviewSession, ReviewSummary
 from voxello.dialogue.script import (
+    ALLOWED_TAGS,
     ScriptSegment,
     effective_tts_text,
     is_spoken,
@@ -39,7 +43,9 @@ from voxello.dialogue.script import (
     speaker_of,
 )
 from voxello.dialogue.segment import DEFAULT_MAX_CHARS, default_tts_text, segment_text
+from voxello.dialogue.status import format_status, project_status
 from voxello.errors import INVALID_PARAMETER, INVALID_SCRIPT, VoxelloError
+from voxello.tts.base import SPEED_RANGE
 
 if TYPE_CHECKING:
     from voxello.config import Settings, VoiceStudioSettings
@@ -51,6 +57,39 @@ if TYPE_CHECKING:
 LABEL_WIDTH = 20
 KEY_POLL_SECONDS = 0.03
 WINDOWS_ARROWS = {"H": "\x1b[A", "P": "\x1b[B", "M": "\x1b[C", "K": "\x1b[D"}
+DEFAULT_NARRATOR = {"it": "narratore"}  # other languages: "narrator"
+
+TAGS_HELP = textwrap.fill(
+    " ".join(f"[{tag}]" for tag in sorted(ALLOWED_TAGS)),
+    width=80,
+    initial_indent=" " * 15,
+    subsequent_indent=" " * 15,
+)
+ANNOTATE_HELP = f"""\
+Merge annotations into script.yaml by segment id. The input is a YAML mapping
+{{id: {{field: value}}}}; null resets a field. All or nothing: an unknown id or
+field, a change to `text` or an invalid value rejects the whole input.
+
+Fields:
+  speaker      who says a speech segment: a lowercase name (a-z, 0-9, - and _,
+               up to 32 characters), the same name in every chapter of a book.
+               Narration and headings need none: the cast's narrator reads them.
+  register     how the line is said, a register of the speaker in cast.yaml:
+               whisper, sad, angry, happy or one you recorded. Unset: main voice.
+  tts_text     what is spoken instead of `text`. Never change the words: only
+               add a tag at the start or adjust punctuation. Tags:
+{TAGS_HELP}
+  speed        for this line only: 0.85-1.15 sounds natural (accepted
+               {SPEED_RANGE[0]}-{SPEED_RANGE[1]}).
+  attribution  true on narration that only says who speaks ("disse lei.");
+               `attributions: drop` in cast.yaml then leaves it out.
+  skip         true: never spoken (a point-of-view marker, a note).
+
+Example:
+  p002.1: {{speaker: anna}}
+  p002.2: {{attribution: true}}
+  p004.1: {{speaker: bruno, register: whisper, tts_text: "[sigh] Lo so."}}
+"""
 
 
 def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -84,7 +123,11 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     )
 
     annotate = dsub.add_parser(
-        "annotate", parents=[project], help="Merge annotations ({id: {field: value}}) by id"
+        "annotate",
+        parents=[project],
+        help="Merge annotations ({id: {field: value}}) by id",
+        description=ANNOTATE_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     annotate.add_argument("file", help="YAML file, or - for stdin")
 
@@ -92,6 +135,30 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     show = dsub.add_parser("show", parents=[project], help="Screenplay view of the spoken text")
     _add_window(show)
     dsub.add_parser("stats", parents=[project], help="Lines and characters per speaker")
+    dsub.add_parser(
+        "status", parents=[project], help="Where the project stands and the next command"
+    )
+
+    cast = dsub.add_parser(
+        "cast",
+        parents=[project],
+        help="Draft cast.yaml from the speakers and the server's cloned voices",
+        description=(
+            "Prints a cast.yaml with the narrator and every speaker of the script. Each voice "
+            "is the cloned profile with the character's name (clone:anna), each register a "
+            "profile named anna-<register>; a name in speech.voice_designs becomes that "
+            "design. Voices missing on the server are marked TODO with the command to record "
+            "them."
+        ),
+    )
+    cast.add_argument("--write", action="store_true", help="Write cast.yaml instead of printing")
+    cast.add_argument("--force", action="store_true", help="With --write, replace cast.yaml")
+    cast.add_argument(
+        "--narrator", help="Name of the narrator (default: narratore for Italian, else narrator)"
+    )
+    cast.add_argument(
+        "-l", "--language", help="Language of the text (default: speech.default_language)"
+    )
 
     render_parser = dsub.add_parser(
         "render", parents=[project], help="Synthesize every line without a current take"
@@ -173,6 +240,10 @@ def run(settings: Settings, args: argparse.Namespace) -> int:
         return cmd_show(project, args)
     if command == "stats":
         return cmd_stats(project)
+    if command == "status":
+        return cmd_status(project, settings)
+    if command == "cast":
+        return asyncio.run(cmd_cast(project, settings, args))
     if command == "review":
         return _run_review(project, settings, args)
     if command == "play":
@@ -319,6 +390,72 @@ def cmd_stats(project: Project) -> int:
         print(f"{name:<20} {count:>6} {chars[name]:>7}")
     if unassigned:
         print(f"unassigned speech: {unassigned} line{'s' if unassigned != 1 else ''}")
+    return 0
+
+
+def cmd_status(project: Project, settings: Settings) -> int:
+    for line in format_status(project_status(project, _defaults(settings)), project.root):
+        print(line)
+    return 0
+
+
+async def list_profile_ids(settings: Settings) -> set[str] | None:
+    """The cloned voices on the server, or ``None`` (with a warning) when they cannot be read."""
+    from voxello.tts.voicestudio import VoiceStudioProvider
+
+    store = VoiceStudioProvider(settings.tts.voicestudio)
+    try:
+        return {profile.profile_id for profile in await store.list_voice_profiles()}
+    except VoxelloError as exc:
+        print(
+            f"warning: cannot list the server's cloned voices ({exc.code}); the draft uses "
+            "clone:<name> for every character.",
+            file=sys.stderr,
+        )
+        return None
+    finally:
+        await store.aclose()
+
+
+async def cmd_cast(project: Project, settings: Settings, args: argparse.Namespace) -> int:
+    language = (args.language or settings.speech.default_language).strip().lower()
+    narrator = args.narrator or DEFAULT_NARRATOR.get(language, "narrator")
+    if not NAME_RE.fullmatch(narrator):
+        raise VoxelloError(
+            INVALID_PARAMETER,
+            f"Narrator name {narrator!r}: use up to 32 lowercase letters, digits, '-' or '_'.",
+        )
+    if args.write and project.cast_path.exists() and not args.force:
+        raise VoxelloError(
+            INVALID_SCRIPT,
+            f"{project.cast_path} already exists: edit it, or pass --force to replace it.",
+        )
+    draft = draft_cast(
+        project.load_script(),
+        language=language,
+        narrator=narrator,
+        profiles=await list_profile_ids(settings),
+        designs=settings.speech.voice_designs,
+    )
+    if args.write:
+        write_atomic(project.cast_path, draft.text.encode("utf-8"))
+        print(f"Wrote {project.cast_path}.")
+    else:
+        print(draft.text, end="")
+    for name in draft.missing_voices:
+        print(f"missing voice: clone:{name} (voxello voice record {name})", file=sys.stderr)
+    for name, register, _lines in draft.missing_registers:
+        print(
+            f"missing register: clone:{name}-{register} "
+            f"(voxello voice record {name} --register {register})",
+            file=sys.stderr,
+        )
+    if draft.unassigned:
+        print(
+            f"warning: {draft.unassigned} speech segments have no speaker yet "
+            "(voxello dialogue segments --pending).",
+            file=sys.stderr,
+        )
     return 0
 
 
