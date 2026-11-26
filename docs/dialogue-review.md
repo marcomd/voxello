@@ -70,6 +70,88 @@ During review:
 starts at a specific segment. Registers (`g`) are available when the speaker has a `registers`
 mapping in the cast; see [recording voices](recording-voices.md) to prepare those profiles.
 
+## Change the source during review
+
+Use `sync` to update an initialized project; `init` still creates projects and refuses to
+replace existing ones. Finish or quit an active review/render before synchronizing.
+
+```bash
+uv run voxello dialogue sync revised-chapter.txt -p tmp/chapter --dry-run
+uv run voxello dialogue sync revised-chapter.txt -p tmp/chapter
+```
+
+The preview lists old-to-new IDs, new/unmatched and old/unmatched segments, ambiguous
+duplicates, whether each line needs annotation/check, render or review, and the recovery
+copy location. Apply requires an affirmative answer (`y` or `s`); Enter, EOF or Ctrl-C at
+the prompt cancels. `--dry-run` never prompts or writes project files. No changes means no
+backup or rewriting. There is no `--yes` option. The existing `max_chars` is retained.
+
+Matching uses exact source text **and segment kind**, first in unique intact paragraphs,
+then in unique remaining segments. It does not use fuzzy similarity or old positional IDs
+to guess associations. Intact unique paragraphs can preserve repeated phrases within them;
+unresolved duplicate paragraphs/phrases, edited text and segment splits/merges receive no
+automatic transfer. Even a punctuation change in the source can therefore need new work.
+
+Review pronunciation edits live in `script.yaml` as `tts_text`, separately from source
+`text`. Removing final stops or adding a pronunciation accent such as `antracíte` is
+preserved exactly for a matched segment, along with speaker, register, speed, attribution,
+skip, every take, QA, selection and approval metadata. Whether an approval is usable still
+depends on its audio existing and its fingerprint matching current effective inputs with
+that take's own seed. Changed cast/configuration does not make stale takes valid.
+
+For unmatched old segments the preview shows custom `tts_text` explicitly as **not
+transferred**, and retains it in the recovery copy. New speech may need speaker annotations
+before `check`/render succeeds. The old review position follows its matched segment, or
+resets to the first pending line when its segment is no longer associated.
+
+If you already edited the internal source, this works too:
+
+```bash
+uv run voxello dialogue sync tmp/chapter/source.txt -p tmp/chapter --dry-run
+uv run voxello dialogue sync tmp/chapter/source.txt -p tmp/chapter
+```
+
+The old logical source comes from `script.yaml`. If the old source hash no longer matches
+`source.txt`, sync warns that the exact old source bytes cannot be recovered. The backup
+contains the internal source as it stands before sync and the previous script with its
+original segments and annotations. A take stores a fingerprint, not a readable historical
+copy of `tts_text`: earlier pronunciation variants already absent from the script cannot be
+reconstructed from that fingerprint.
+
+Each confirmed change retains `sync-backups/<operation>/before/` containing the previous
+`source.txt`, `script.yaml`, `cast.yaml`, `state.json` and entire `takes/` tree when present.
+`report.json` records mappings, unmatched old/new segments, custom text and the preview's
+line statuses. Files are ordinary local files; you can inspect old annotations/audio there.
+Preparation and displaced files may also remain in the operation directory. Nothing is
+automatically pruned, and preparation can require several times the original audio size in
+free disk space. Existing exports and unrelated project files are preserved; exports must
+be regenerated for the new text.
+
+Sync rechecks source, script, cast, state and audio contents after confirmation. If they
+changed, run the preview again. CLI commands use an OS lock stored in a persistent sibling
+file `.PROJECT.voxello.lock`; the project's parent must be writable. A busy project is
+rejected, rather than updated while another command is using it. Direct Python callers
+that run concurrently must use the same `project_lock` context.
+
+An error while applying triggers rollback. If the process dies or rollback fails, a
+`.sync-transaction.json` marker blocks ordinary commands (including init) from consuming
+an incomplete project. Recover with:
+
+```bash
+uv run voxello dialogue sync --recover -p tmp/chapter
+```
+
+Recovery previews its action and asks for confirmation. An interrupted apply restores
+the previous managed files; a completely committed sync with pending cleanup validates and
+keeps the new files. Recovery can be retried if interrupted and never consumes the backup.
+Do not delete the marker or backups to bypass recovery. Damaged backups or journals require
+manual inspection. The mechanism targets local filesystems and process interruption; it
+does not promise recovery from disk corruption or every power-loss/filesystem failure
+(directory fsync is unavailable through Python's standard library on Windows).
+
+After sync, run `voxello dialogue status -p DIR`, annotate if needed, render missing lines,
+review with `--pending`, and export again. Sync itself calls no TTS server and plays no audio.
+
 ## A chapter or an existing sample
 
 Start from a UTF-8 text file, such as a chapter you provide or a local `tmp/example2.txt`:

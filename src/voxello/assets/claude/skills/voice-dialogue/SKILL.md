@@ -20,6 +20,13 @@ YAML files or segment lists into the conversation unless they ask.
 - **Resume first.** If the project directory already exists, run
   `voxello dialogue status -p DIR` and continue from what `Next` says. Run `status` again
   whenever you are unsure what comes next.
+- **Source changes.** For an initialized project whose source changed, preview with
+  `voxello dialogue sync SOURCE -p DIR --dry-run` (SOURCE may be the already-edited internal
+  `source.txt`). Show ambiguous matches and pronunciation customizations that will not
+  transfer. Give the user `voxello dialogue sync SOURCE -p DIR` to confirm in their terminal;
+  never reinitialize or manually renumber takes. Sync preserves certain matches and archives
+  the rest under `sync-backups/`. If interrupted recovery is required, give the user
+  `voxello dialogue sync --recover -p DIR`. Then resume from `status` and the new segment IDs.
 - **The user's terminal.** Three commands need a person at the keyboard, the microphone or the
   speakers: `voxello dialogue review`, `voxello dialogue play` and `voxello voice record`. Never
   run them yourself. Give the user the exact command; in Claude Code they can type it with a

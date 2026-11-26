@@ -1,14 +1,15 @@
 """A dialogue project directory (roadmap 8.3-8.4)::
 
     chapter1/
-      source.txt     # byte copy of the input, never modified
+      source.txt     # byte copy of the input, updated only by explicit sync
       script.yaml    # segments and annotations
       cast.yaml      # characters, voices, registers, generation values, pauses
       state.json     # machine-owned: takes per line and the approved fingerprint
       takes/<id>/<fingerprint[:16]>.wav
 
 Every file is written atomically (a temporary sibling, then ``os.replace``), so an interrupted
-command never leaves a half-written script, state or take.
+command never leaves a half-written script, state or take. Multi-file source synchronization
+adds a project lock, backup and recovery journal (``sync_storage``).
 """
 
 from __future__ import annotations
@@ -26,10 +27,12 @@ from pydantic import ValidationError
 
 from voxello.dialogue import qa
 from voxello.dialogue.cast import Cast, resolve_line_voice
+from voxello.dialogue.project_lock import project_lock
 from voxello.dialogue.script import (
     AnnotationResult,
     CheckReport,
     Script,
+    ScriptSegment,
     apply_annotations,
     check,
     effective_tts_text,
@@ -42,6 +45,17 @@ from voxello.dialogue.takes import LineRequest, LineState, Signal, State, Take, 
 from voxello.errors import INVALID_SCRIPT, STORAGE_ERROR, VoxelloError
 
 TAKE_NAME_CHARS = 16
+SYNC_JOURNAL = ".sync-transaction.json"
+
+
+def _ensure_recovered(root: Path) -> None:
+    marker = root / SYNC_JOURNAL
+    if marker.exists() or marker.is_symlink():
+        raise VoxelloError(
+            STORAGE_ERROR,
+            "An interrupted sync needs recovery; run `voxello dialogue sync --recover "
+            f"-p {root}` before using this project.",
+        )
 
 
 @dataclass(frozen=True)
@@ -82,6 +96,53 @@ def write_atomic(path: Path, data: bytes) -> None:
         raise
 
 
+def read_source(source: Path) -> tuple[bytes, str]:
+    """Read the exact input bytes and UTF-8 text for both init and sync."""
+    try:
+        raw = source.read_bytes()
+    except OSError as exc:
+        raise VoxelloError(INVALID_SCRIPT, f"Cannot read {source}: {exc}") from exc
+    try:
+        return raw, raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise VoxelloError(INVALID_SCRIPT, f"{source} is not UTF-8 text.") from exc
+
+
+def resolve_line(seg: ScriptSegment, cast: Cast, defaults: LineDefaults) -> Line:
+    """Resolve one validated, spoken segment, also usable by an in-memory sync preview."""
+    speaker = speaker_of(seg, cast)
+    assert speaker is not None
+    generation = cast.generation
+    choice = resolve_line_voice(cast, speaker, seg.register_, defaults.designs)
+    speed = next(
+        (
+            value
+            for value in (
+                seg.speed,
+                cast.characters[speaker].speed,
+                generation.speed,
+                defaults.speed,
+            )
+            if value is not None
+        ),
+        None,
+    )
+    return Line(
+        seg.id,
+        speaker,
+        LineRequest(
+            tts_text=effective_tts_text(seg),
+            voice=choice.voice,
+            instructions=choice.instructions,
+            language=cast.language,
+            speed=speed,
+            num_step=generation.num_step if generation.num_step is not None else defaults.num_step,
+            seed=generation.seed,
+            guidance_scale=defaults.guidance_scale,
+        ),
+    )
+
+
 def wav_duration_ms(audio: bytes) -> int | None:
     try:
         with wave.open(io.BytesIO(audio), "rb") as wav:
@@ -103,20 +164,20 @@ class Project:
 
     @classmethod
     def init(cls, source: Path, root: Path, *, max_chars: int = DEFAULT_MAX_CHARS) -> Project:
+        ownership = project_lock(root) if root.is_dir() else contextlib.nullcontext()
+        with ownership:
+            _ensure_recovered(root)
+            return cls._init(source, root, max_chars=max_chars)
+
+    @classmethod
+    def _init(cls, source: Path, root: Path, *, max_chars: int) -> Project:
         project = cls(root)
         if project.script_path.exists():
             raise VoxelloError(
                 INVALID_SCRIPT,
                 f"{root} already holds a dialogue project; choose another directory.",
             )
-        try:
-            raw = source.read_bytes()
-        except OSError as exc:
-            raise VoxelloError(INVALID_SCRIPT, f"Cannot read {source}: {exc}") from exc
-        try:
-            text = raw.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise VoxelloError(INVALID_SCRIPT, f"{source} is not UTF-8 text.") from exc
+        raw, text = read_source(source)
         root.mkdir(parents=True, exist_ok=True)
         write_atomic(project.source_path, raw)
         project.save_script(new_script(text, max_chars=max_chars))
@@ -125,6 +186,7 @@ class Project:
     @classmethod
     def open(cls, root: Path) -> Project:
         project = cls(root)
+        _ensure_recovered(root)
         if not project.script_path.is_file():
             raise VoxelloError(
                 INVALID_SCRIPT,
@@ -252,37 +314,6 @@ class Project:
         if not report.ok:
             problems = "; ".join(str(issue) for issue in report.errors)
             raise VoxelloError(INVALID_SCRIPT, f"`dialogue check` fails: {problems}")
-        generation = cast.generation
-        num_step = generation.num_step if generation.num_step is not None else defaults.num_step
-        lines: list[Line] = []
-        for seg in script.segments:
-            if not is_spoken(seg, cast):
-                continue
-            speaker = speaker_of(seg, cast)
-            assert speaker is not None  # check guarantees it
-            choice = resolve_line_voice(cast, speaker, seg.register_, defaults.designs)
-            speed = next(
-                (
-                    value
-                    for value in (
-                        seg.speed,
-                        cast.characters[speaker].speed,
-                        generation.speed,
-                        defaults.speed,
-                    )
-                    if value is not None
-                ),
-                None,
-            )
-            request = LineRequest(
-                tts_text=effective_tts_text(seg),
-                voice=choice.voice,
-                instructions=choice.instructions,
-                language=cast.language,
-                speed=speed,
-                num_step=num_step,
-                seed=generation.seed,
-                guidance_scale=defaults.guidance_scale,
-            )
-            lines.append(Line(seg.id, speaker, request))
-        return lines
+        return [
+            resolve_line(seg, cast, defaults) for seg in script.segments if is_spoken(seg, cast)
+        ]

@@ -31,6 +31,7 @@ from voxello.dialogue.cast_draft import draft_cast
 from voxello.dialogue.export import export
 from voxello.dialogue.play import PlayThrough
 from voxello.dialogue.project import LineDefaults, Project, write_atomic
+from voxello.dialogue.project_lock import project_lock
 from voxello.dialogue.render import RenderEvent, render
 from voxello.dialogue.review import normalize_key
 from voxello.dialogue.review_session import ReviewSession, ReviewSummary
@@ -44,6 +45,8 @@ from voxello.dialogue.script import (
 )
 from voxello.dialogue.segment import DEFAULT_MAX_CHARS, default_tts_text, segment_text
 from voxello.dialogue.status import format_status, project_status
+from voxello.dialogue.sync import format_plan, plan_sync
+from voxello.dialogue.sync_storage import apply_sync, recover_sync, recovery_plan
 from voxello.errors import INVALID_PARAMETER, INVALID_SCRIPT, VoxelloError
 from voxello.tts.base import SPEED_RANGE
 
@@ -112,6 +115,23 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
         type=int,
         default=DEFAULT_MAX_CHARS,
         help=f"Longest run of whole sentences in one segment (default {DEFAULT_MAX_CHARS})",
+    )
+
+    sync = dsub.add_parser(
+        "sync",
+        parents=[project],
+        help="Preview and confirm source changes, preserving unambiguous takes and annotations",
+    )
+    sync.add_argument(
+        "source", type=Path, nargs="?", help="New UTF-8 source (may be project/source.txt)"
+    )
+    sync.add_argument(
+        "--dry-run", action="store_true", help="Preview without prompting or writing project files"
+    )
+    sync.add_argument(
+        "--recover",
+        action="store_true",
+        help="Confirm recovery of an interrupted sync; omit SOURCE",
     )
 
     segments = dsub.add_parser(
@@ -229,7 +249,16 @@ def run(settings: Settings, args: argparse.Namespace) -> int:
     command = args.dialogue_command
     if command == "init":
         return cmd_init(args)
+    if command == "sync":
+        return cmd_sync(settings, args)
     project = Project.open(args.project)
+    with project_lock(project.root):
+        Project.open(project.root)  # recheck after acquiring ownership
+        return _run_project(project, settings, args)
+
+
+def _run_project(project: Project, settings: Settings, args: argparse.Namespace) -> int:
+    command = args.dialogue_command
     if command == "segments":
         return cmd_segments(project, args)
     if command == "annotate":
@@ -251,6 +280,43 @@ def run(settings: Settings, args: argparse.Namespace) -> int:
     if command == "export":
         return cmd_export(project, settings, args)
     return asyncio.run(cmd_render(project, settings, args))
+
+
+def cmd_sync(settings: Settings, args: argparse.Namespace) -> int:
+    if args.recover:
+        if args.source is not None or args.dry_run:
+            raise VoxelloError(INVALID_PARAMETER, "--recover accepts neither SOURCE nor --dry-run.")
+        project = Project(args.project)
+        recovery = recovery_plan(project)
+        if recovery is None:
+            print("No interrupted sync to recover.")
+            return 0
+        action = (
+            "Finish committed sync cleanup"
+            if recovery.journal.phase == "committed"
+            else "Restore pre-sync files"
+        )
+        print(f"{action}. Recovery copy: {recovery.archive / 'before'}")
+        if ask("Recover this project? [y/N] ").strip().lower() not in ("y", "s"):
+            print("Recovery cancelled; project remains blocked.")
+            return 0
+        recover_sync(project, recovery)
+        print("Recovery complete; recovery copies have been retained.")
+        return 0
+    if args.source is None:
+        raise VoxelloError(INVALID_PARAMETER, "sync requires SOURCE, or --recover without SOURCE.")
+    project = Project.open(args.project)
+    plan = plan_sync(project, args.source, _defaults(settings))
+    print("\n".join(format_plan(plan, project.root)))
+    if args.dry_run or not plan.changed:
+        return 0
+    if ask("Apply this sync? [y/N] ").strip().lower() not in ("y", "s"):
+        print("Sync cancelled; project files are unchanged.")
+        return 0
+    archive = apply_sync(project, plan)
+    print(f"Sync complete. Recovery copy: {archive}")
+    print(f"Next: voxello dialogue status -p {shlex.quote(str(project.root))}")
+    return 0
 
 
 def _run_review(project: Project, settings: Settings, args: argparse.Namespace) -> int:
