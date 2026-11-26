@@ -297,7 +297,7 @@ def test_report_records_original_text_and_custom_pronunciation(
     monkeypatch.setattr(commands, "ask", lambda _: "y")
     assert invoke(project, str(source)) == 0
     archive = next((project.root / "sync-backups").iterdir())
-    report = json.loads((archive / "report.json").read_text())
+    report = json.loads((archive / "report.json").read_text(encoding="utf-8"))
     assert report["unmatched_old"][0]["tts_text"] == CUSTOM
     assert report["unmatched_old"][0]["text"] == SOURCE.split("\n")[0]
 
@@ -407,7 +407,9 @@ def test_preview_uses_existing_audio_validity_rules(
         shutil.rmtree(project.takes_dir / "p001.1")
     elif stale == "voice":
         project.cast_path.write_text(
-            project.cast_path.read_text().replace("clone:narratore-whisper", "clone:other"),
+            project.cast_path.read_text(encoding="utf-8").replace(
+                "clone:narratore-whisper", "clone:other"
+            ),
             encoding="utf-8",
         )
     else:
@@ -464,7 +466,7 @@ def test_breaks_skips_and_dropped_attributions_remain_unspoken(
 ) -> None:
     project, source = prepared
     project.annotate({"p001.1": {"skip": True}, "p002.1": {"attribution": True}})
-    cast = yaml.safe_load(project.cast_path.read_text())
+    cast = yaml.safe_load(project.cast_path.read_text(encoding="utf-8"))
     cast["attributions"] = "drop"
     project.cast_path.write_text(yaml.safe_dump(cast), encoding="utf-8")
     source.write_text(TITLES + SOURCE + "\n---\n", encoding="utf-8")

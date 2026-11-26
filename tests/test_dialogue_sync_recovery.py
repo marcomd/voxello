@@ -239,15 +239,19 @@ def test_corrupted_prepared_audio_is_rejected_before_apply(
     before = files(project.root)
     source.write_text(TITLES + SOURCE, encoding="utf-8")
     monkeypatch.setattr(commands, "ask", lambda _: "y")
-    copy = shutil.copyfile
+    copy = sync_storage._copy
 
-    def corrupt_audio(src, dst, **kwargs):  # type: ignore[no-untyped-def]
-        result = copy(src, dst, **kwargs)
-        if "after" in Path(dst).parts and Path(dst).suffix == ".wav":
-            Path(dst).write_bytes(b"corrupt audio")
-        return result
+    # Hook the project's copy helper, not shutil.copyfile: on Windows shutil.copy2 (and
+    # copytree through it) uses CopyFile2 and never calls copyfile.
+    def corrupt_audio(source: Path, target: Path) -> None:
+        copy(source, target)
+        if "after" not in target.parts:
+            return
+        for path in [target, *target.rglob("*")] if target.is_dir() else [target]:
+            if path.suffix == ".wav":
+                path.write_bytes(b"corrupt audio")
 
-    monkeypatch.setattr(shutil, "copyfile", corrupt_audio)
+    monkeypatch.setattr(sync_storage, "_copy", corrupt_audio)
     assert invoke(project, str(source)) == 1
     for name, data in before.items():
         assert (project.root / name).read_bytes() == data
