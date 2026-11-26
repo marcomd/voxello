@@ -9,6 +9,14 @@ change the MCP tool signatures or the configuration layout.
 
 ### Added
 
+- `voxello dialogue sync SOURCE -p DIR` previews and confirms source changes in existing
+  projects, preserving unambiguous unchanged paragraphs/segments, custom pronunciation,
+  takes, selection, QA and valid approvals across ID changes. `--dry-run` leaves project
+  files unchanged; all previous managed files, including unmatched and unrecorded audio,
+  stay in local `sync-backups/` copies. Interrupted multi-file updates block normal use
+  until `sync --recover -p DIR`; CLI commands share a cross-process project lock. `init`
+  retains its existing behavior, with an additional guard against interrupted syncs.
+- Preserve recoverability if persisting the sync commit marker fails after it is published.
 - `voxello voice record NAME [--register R | --all]` records a reference clip with guidance
   (tone hint, sentence to read, countdown, record until Enter, cleanup with ffmpeg, playback,
   redo) and clones it as `NAME` or `NAME-REGISTER` with the read sentence as transcript, after

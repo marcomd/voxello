@@ -407,6 +407,15 @@ change register with `g`, or adjust speed with `+`/`-`. Quit with `q` and resume
 approvals, take selections and the review position are saved after each action. The project
 directory keeps the source text, audio takes and exported files so you can return to them.
 
+To change the source during production, preview with
+`voxello dialogue sync SOURCE -p DIR --dry-run`, then run the same command without
+`--dry-run` and confirm its plan. Unambiguous unchanged paragraphs/segments keep pronunciation
+corrections (`tts_text`), takes, selections and valid approvals even when their IDs change.
+Changed or ambiguous text starts without transferred annotations/audio; the previous work is
+retained under `DIR/sync-backups/`, with custom pronunciation losses called out before confirmation.
+`SOURCE` may be `DIR/source.txt` even if you already edited it. See
+[source synchronization and recovery](docs/dialogue-review.md#change-the-source-during-review).
+
 When every line is approved, `voxello dialogue play` plays the whole scene with the cast's
 pauses (Ctrl-C jumps into review at the line you stopped on) and `voxello dialogue export`
 writes `final.wav` with evened loudness, a timeline and, with `--srt`, subtitles.
