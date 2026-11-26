@@ -133,7 +133,9 @@ file `.PROJECT.voxello.lock`; the project's parent must be writable. A busy proj
 rejected, rather than updated while another command is using it. Direct Python callers
 that run concurrently must use the same `project_lock` context.
 
-An error while applying triggers rollback. If the process dies or rollback fails, a
+An error while replacing project files triggers rollback. If persisting the commit marker
+fails, recovery uses its recorded phase to restore the old files or retain the complete new
+project. If the process dies or rollback fails, a
 `.sync-transaction.json` marker blocks ordinary commands (including init) from consuming
 an incomplete project. Recover with:
 

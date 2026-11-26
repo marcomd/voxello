@@ -16,6 +16,7 @@ change the MCP tool signatures or the configuration layout.
   stay in local `sync-backups/` copies. Interrupted multi-file updates block normal use
   until `sync --recover -p DIR`; CLI commands share a cross-process project lock. `init`
   retains its existing behavior, with an additional guard against interrupted syncs.
+- Preserve recoverability if persisting the sync commit marker fails after it is published.
 - `voxello voice record NAME [--register R | --all]` records a reference clip with guidance
   (tone hint, sentence to read, countdown, record until Enter, cleanup with ffmpeg, playback,
   redo) and clones it as `NAME` or `NAME-REGISTER` with the read sentence as transcript, after

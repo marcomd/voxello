@@ -117,6 +117,31 @@ def test_apply_and_rollback_failure_leave_a_recoverable_project(
         assert (project.root / name).read_bytes() == data
 
 
+@pytest.mark.parametrize("published", [False, True])
+def test_commit_marker_failure_keeps_project_recoverable(
+    prepared: tuple[Project, Path], monkeypatch: pytest.MonkeyPatch, published: bool
+) -> None:
+    project, source = prepared
+    original = project.source_path.read_bytes()
+    source.write_text(TITLES + SOURCE, encoding="utf-8")
+    monkeypatch.setattr(commands, "ask", lambda _: "y")
+    write = sync_storage._durable_write
+
+    def fail_committed_marker(path: Path, data: bytes) -> None:
+        if path == project.root / sync_storage.JOURNAL and json.loads(data)["phase"] == "committed":
+            if published:
+                sync_storage.write_atomic(path, data)
+            raise OSError("journal persistence failed")
+        write(path, data)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sync_storage, "_durable_write", fail_committed_marker)
+        assert invoke(project, str(source)) == 1
+    assert invoke(project, "--recover") == 0
+    assert project.source_path.read_bytes() == (source.read_bytes() if published else original)
+    assert Project.open(project.root).check().ok
+
+
 def test_commit_cleanup_failure_keeps_new_project_and_finishes_on_recovery(
     prepared: tuple[Project, Path],
     monkeypatch: pytest.MonkeyPatch,

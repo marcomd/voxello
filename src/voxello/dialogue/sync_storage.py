@@ -297,8 +297,6 @@ def _apply(project: Project, plan: SyncPlan) -> Path:
             _sync_dir(project.root)
         if snapshot(project.root) != expected:
             raise VoxelloError(STORAGE_ERROR, "Synced files differ from the prepared snapshot.")
-        journal.phase = "committed"
-        _durable_write(marker, journal.model_dump_json().encode())
     except (OSError, VoxelloError, KeyboardInterrupt):
         recovery = Recovery(marker.read_bytes(), journal, archive)
         try:
@@ -309,6 +307,10 @@ def _apply(project: Project, plan: SyncPlan) -> Path:
                 f"Sync and rollback failed; run sync --recover. Backups: {archive}",
             ) from exc
         raise
+    # Once publishing the commit marker begins, its on-disk phase may be either value.
+    # Leave the complete new snapshot in place so either recovery path remains safe.
+    journal.phase = "committed"
+    _durable_write(marker, journal.model_dump_json().encode())
     # A cleanup failure after commit is recovered by validating the complete new snapshot.
     marker.unlink()
     _sync_dir(project.root)
