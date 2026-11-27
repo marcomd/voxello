@@ -1,6 +1,6 @@
 # Voxello roadmap
 
-Status as of 2026-11-21 (version 0.3.0). The MVP described in the specification (phases 1-3, section 38) is
+Status as of 2026-11-27 (version 0.4.0). The MVP described in the specification (phases 1-3, section 38) is
 implemented: `speak`, `stop_speaking`, `get_status`, `notify`, queue with interrupt, VoiceStudio /
 omnivoice-server provider, desktop notifications, CLI, Claude Code skill and hook. This roadmap
 lists what is missing to make Voxello an everyday tool, in priority order.
@@ -266,7 +266,7 @@ rollout format is not a stable interface, so the "already spoke" check for Codex
 and fails open; the Codex paths were verified against the documentation and a local
 `codex-cli 0.169`, not in a live Codex session.
 
-## Milestone 8 — Multi-character dialogue (in progress)
+## Milestone 8 — Multi-character dialogue (done 2026-11-27)
 
 Goal: turn a text (a page, a chapter) into an audio dialogue with a narrator and one voice per
 character, every line reviewed by ear and regenerable alone or in the context of the scene.
