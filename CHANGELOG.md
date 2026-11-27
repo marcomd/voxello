@@ -7,6 +7,12 @@ change the MCP tool signatures or the configuration layout.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-27
+
+Multi-voice dialogue production (roadmap milestone 8): guided voice recording, segmentation
+and annotation, reproducible takes, review by ear, play-through and export, source sync, and
+the skill and cast draft that let an agent drive the whole flow.
+
 ### Added
 
 - `voxello dialogue sync SOURCE -p DIR` previews and confirms source changes in existing
@@ -78,6 +84,16 @@ change the MCP tool signatures or the configuration layout.
 - The TTS provider accepts per-request `seed`, `speed` and `num_step`
   (`SynthesisOptions`): the same seed reproduces the same audio. `speak` and `notify` do not
   use them yet, so their requests and cache keys are unchanged.
+
+### Changed
+
+- The narrator can have registers in `cast.yaml` like any character: render reads narration
+  with its main voice and `g` in `dialogue review` re-renders a narration line with one
+  (documented in `docs/dialogue-review.md`; the `voice-dialogue` skill no longer annotates
+  registers on narration and offers recording the narrator's).
+- `docs/recording-voices.md` describes cutting several registers from one long recording of
+  the same person with `voice clone --prepare --start --duration`, the most neutral window
+  as the main voice; the `voice-dialogue` skill offers it.
 
 ## [0.3.0] - 2026-11-21
 
@@ -271,7 +287,8 @@ First working version: the MVP of the specification (phases 1-3) plus roadmap mi
 - Installable as a uv tool from any project; dynamic version from `voxello.__version__`;
   GitHub Actions CI and a tag-driven release workflow publishing to PyPI.
 
-[Unreleased]: https://github.com/marcomd/voxello/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/marcomd/voxello/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/marcomd/voxello/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/marcomd/voxello/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/marcomd/voxello/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/marcomd/voxello/releases/tag/v0.1.0

@@ -69,6 +69,19 @@ During review:
 `--flagged` puts lines with QA warnings first; it still includes the other lines. `--from ID`
 starts at a specific segment. Registers (`g`) are available when the speaker has a `registers`
 mapping in the cast; see [recording voices](recording-voices.md) to prepare those profiles.
+The narrator works the same way on narration and headings: render reads them with its main
+voice, and `g` re-renders one line with a register, `0` goes back to the main voice.
+
+```yaml
+characters:
+  narratore:
+    voice: clone:narratore
+    registers:
+      whisper: clone:narratore-whisper   # voxello voice record narratore --register whisper
+```
+
+`voxello dialogue cast` adds these entries by itself when the `narratore-<register>` profiles
+exist on the server.
 
 ## Change the source during review
 
