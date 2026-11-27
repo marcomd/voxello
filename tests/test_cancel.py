@@ -16,7 +16,7 @@ async def test_stop_all(service, player: FakePlayer):
     assert service.get_record(current.request_id).state == RequestState.CANCELLED
     assert service.get_record(queued.request_id).state == RequestState.CANCELLED
     assert (await service.status()).status == "idle"
-    assert list(service.temp_store.directory.iterdir()) == []
+    assert [p for p in service.temp_store.namespace_dir.iterdir() if p.name != "owner"] == []
 
 
 async def test_stop_when_idle(service):

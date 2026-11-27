@@ -190,6 +190,7 @@ class VoxelloService:
         for record in self._records.values():
             if record.audio_path is not None:
                 self.temp_store.discard(record.audio_path)
+        self.temp_store.dispose()
         await self.provider.aclose()
         log.info("Voxello stopped")
 
@@ -267,11 +268,22 @@ class VoxelloService:
                 if cache_key is not None and self.audio_cache is not None
                 else None
             )
+            hit_audio: bytes | None = None
             if entry is not None:
-                audio_path = entry.path
+                # Materialize request-owned playback audio on a hit: the cache entry can
+                # be evicted or cleared by another process while this request is queued.
+                try:
+                    hit_audio = entry.path.read_bytes()
+                except OSError:
+                    log.warning(
+                        "cache entry %s vanished; treating as a miss", (cache_key or "")[:12]
+                    )
+                    entry = None
+            if entry is not None and hit_audio is not None:
+                audio_path = self.temp_store.write(hit_audio)
                 record.cached = True
                 record.voice = entry.voice
-                record.duration_ms = wav_duration_ms(entry.path)
+                record.duration_ms = wav_duration_ms(audio_path)
                 provider_name = entry.provider
                 self._cache_hits += 1
                 log.info(

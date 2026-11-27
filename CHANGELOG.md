@@ -7,6 +7,19 @@ change the MCP tool signatures or the configuration layout.
 
 ## [Unreleased]
 
+### Fixed
+
+- Temporary audio is now written to a per-instance namespace inside the configured temp
+  directory, so a one-shot CLI/hook command never sweeps or deletes the audio owned by a
+  long-lived MCP server (and vice versa). Startup cleanup removes only namespaces whose owner
+  is provably dead; the retention sweeper only touches the service's own namespace.
+- `stop` and interrupts are honored while the player is still starting: the spawn phase is
+  modeled as cancellable, the old handle is terminated once and no audio starts afterwards.
+- A cache hit now materializes request-owned playback audio in the temp store instead of
+  handing the player the cache file directly, so cache eviction or `cache clear` from another
+  process cannot invalidate a queued playback. A cache entry that vanishes between lookup and
+  read is treated as a miss and synthesized fresh.
+
 ## [0.4.0] - 2026-11-27
 
 Multi-voice dialogue production (roadmap milestone 8): guided voice recording, segmentation

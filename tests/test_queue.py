@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+
 import pytest
 
 from voxello.core.models import RequestState
@@ -85,3 +88,114 @@ async def test_interrupt_keeps_queue_when_configured(
         assert queued.request_id in svc.playback.queued_ids()
     finally:
         await svc.aclose()
+
+
+class BlockingPlayer(FakePlayer):
+    """A player whose spawn phase blocks until the test releases it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.started_play = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def play(self, path: Path):
+        self.started_play.set()
+        await self.release.wait()
+        return await super().play(path)
+
+
+async def _wait_handles(player, n):
+    for _ in range(100):
+        if len(player.handles) >= n:
+            return
+        await asyncio.sleep(0)
+    raise AssertionError(f"timed out waiting for {n} handle(s)")
+
+
+async def _make_service(settings, provider, player, notifier, tmp_path):
+    from voxello.core.service import VoxelloService
+    from voxello.storage.files import OutputStore, TempStore
+
+    svc = VoxelloService(
+        settings,
+        provider=provider,
+        player=player,
+        notifier=notifier,
+        temp_store=TempStore(tmp_path / "t", 1, True),
+        output_store=OutputStore(tmp_path / "o"),
+    )
+    await svc.start()
+    return svc
+
+
+async def test_stop_all_while_spawn_is_suspended(settings, provider, notifier, tmp_path):
+    player = BlockingPlayer()
+    svc = await _make_service(settings, provider, player, notifier, tmp_path)
+    try:
+        first = await svc.speak("uno", interrupt=False)
+        await asyncio.wait_for(player.started_play.wait(), 2)
+
+        result = await svc.stop()
+        assert result.status == "stopped"
+
+        player.release.set()
+        await asyncio.wait_for(svc.playback.wait_idle(), 2)
+        handle = player.handles[-1]
+        assert handle.terminated
+        assert svc.get_record(first.request_id).state == RequestState.CANCELLED
+    finally:
+        await svc.aclose()
+
+
+async def test_stop_specific_while_spawn_is_suspended(settings, provider, notifier, tmp_path):
+    player = BlockingPlayer()
+    svc = await _make_service(settings, provider, player, notifier, tmp_path)
+    try:
+        first = await svc.speak("uno", interrupt=False)
+        await asyncio.wait_for(player.started_play.wait(), 2)
+
+        result = await svc.stop(first.request_id)
+        assert result.status == "stopped"
+
+        player.release.set()
+        await asyncio.wait_for(svc.playback.wait_idle(), 2)
+        assert player.handles[-1].terminated
+        assert svc.get_record(first.request_id).state == RequestState.CANCELLED
+    finally:
+        await svc.aclose()
+
+
+async def test_interrupt_while_spawn_is_suspended_progresses_new_request(
+    settings, provider, notifier, tmp_path
+):
+    player = BlockingPlayer()
+    svc = await _make_service(settings, provider, player, notifier, tmp_path)
+    try:
+        first = await svc.speak("uno", interrupt=False)
+        await asyncio.wait_for(player.started_play.wait(), 2)
+
+        second = await svc.speak("due", interrupt=True)
+        assert second.status == "playing"
+
+        player.release.set()
+        await _wait_handles(player, 1)
+        # the old handle is terminated exactly once and the new item is playing
+        old_handle = player.handles[0]
+        assert old_handle.terminated
+        await settle()
+        assert svc.get_record(first.request_id).state == RequestState.CANCELLED
+        assert svc.get_record(second.request_id).state == RequestState.PLAYING
+        assert svc.playback.current.request_id == second.request_id
+    finally:
+        await svc.aclose()
+
+
+async def test_shutdown_while_spawn_is_suspended(settings, provider, notifier, tmp_path):
+    player = BlockingPlayer()
+    svc = await _make_service(settings, provider, player, notifier, tmp_path)
+    await svc.speak("uno", interrupt=False)
+    await asyncio.wait_for(player.started_play.wait(), 2)
+
+    # shutdown must not hang on the suspended spawn; it is allowed to complete
+    await asyncio.wait_for(svc.aclose(), 2)
+    player.release.set()

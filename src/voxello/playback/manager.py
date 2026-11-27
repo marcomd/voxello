@@ -132,10 +132,13 @@ class PlaybackManager:
     # -- internals -----------------------------------------------------------------
 
     async def _terminate_current(self) -> None:
+        # Record intent before checking for a handle: the worker may still be suspended
+        # in ``player.play()`` and has no handle to terminate yet. The worker honors the
+        # intent immediately after spawn returns.
+        self._cancel_requested = True
         handle, current = self._handle, self._current
         if handle is None or current is None:
             return
-        self._cancel_requested = True
         self._stopping = True
         try:
             await handle.terminate()
@@ -170,9 +173,18 @@ class PlaybackManager:
                 try:
                     self._handle = await self.player.play(item.path)
                 except VoxelloError as exc:
+                    outcome: Outcome = "cancelled" if self._cancel_requested else "error"
                     log.error("Playback failed for %s: %s", item.request_id, exc)
                     self._current = None
-                    await self._emit(item, "error")
+                    await self._emit(item, outcome)
+                    continue
+                if self._cancel_requested:
+                    # stop/interrupt was requested while the player was starting; the
+                    # handle must not outlive this item.
+                    await self._handle.terminate()
+                    self._handle = None
+                    self._current = None
+                    await self._emit(item, "cancelled")
                     continue
                 await self._emit(item, "playing")
                 try:
