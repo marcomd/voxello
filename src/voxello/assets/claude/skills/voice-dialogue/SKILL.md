@@ -86,6 +86,8 @@ How to annotate:
   clear sadness, anger, joy for `sad`, `angry`, `happy`). Leave it unset for ordinary lines:
   the main voice is the most natural. Whisper transfers well; sad less; angry and happy are
   weak, so for them also strengthen the punctuation in `tts_text` (a `!`) when the text allows.
+  Not on narration or headings: the narrator reads them with its main voice, and the user picks
+  a narrator register line by line in review.
 - **tts_text** with a tag, sparingly and only at the start of the line:
   `[sigh]` (a sigh: tiredness, resignation, relief), `[laughter]`, `[dissatisfaction-hnn]`
   (annoyed "hmm"), `[surprise-ah]`, `[surprise-oh]`, `[question-ah]`, `[question-oh]`,
@@ -125,11 +127,18 @@ Then interview the user, briefly, using the `stats` numbers:
      `voxello voice record NAME` (add `--all` to record every register in one session); see
      `docs/recording-voices.md` in the Voxello repository for the steps;
    - a clone from an existing recording of that person, with their consent:
-     `voxello voice clone NAME FILE --prepare` (the user runs it and confirms);
+     `voxello voice clone NAME FILE --prepare` (the user runs it and confirms). A long
+     recording often holds several tones: the most neutral 3-10 s window becomes `NAME` (the
+     main voice every line starts with), other windows become registers with
+     `voxello voice clone NAME-calm FILE --prepare --start S --duration D --ref-text "..."`;
    - as a last resort a voice design, `{instructions: "female, young adult, low pitch"}`,
      warning that designed voices are unstable outside Chinese and English.
 3. For registers used by your annotation but not recorded, say how many lines fall back to the
    main voice and offer `voxello voice record NAME --register whisper` (or `--all`).
+   The narrator can have registers too (`voxello voice record narratore --register whisper`):
+   they are not used at render, only offered by `g` in review. Registers cut from one long
+   recording work the same way (`docs/recording-voices.md`, "Registers from one long
+   recording").
 4. Ask whether attributions should be read (`keep`, the default) or dropped.
 
 Write it, then edit `cast.yaml` for the choices that differ from the draft (another clone, a
@@ -167,7 +176,7 @@ voxello dialogue export -p DIR --srt
 
 Explain the review keys in one sentence: Enter approves and goes on, `r` makes another take,
 `1`-`9` picks a take, `p` replays, `c` plays with the neighbouring lines, `e` edits `tts_text`,
-`g` changes register, `+`/`-` change speed, `q` quits (everything is saved; it resumes where it
+`g` changes register (the narrator's too, when it has registers), `+`/`-` change speed, `q` quits (everything is saved; it resumes where it
 stopped). `play` reads the whole scene with the pauses; Ctrl-C there offers to review the line.
 `export` writes `final.wav`, a timeline and subtitles once every line is approved
 (`--allow-unapproved` exports anyway, `--no-level` keeps each take's loudness).

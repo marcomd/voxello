@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import array
+import copy
 import io
 import json
 import math
@@ -326,6 +327,21 @@ async def test_g_changes_the_register(project: Project, provider: ToneProvider) 
     assert "0 main voice · 1 whisper" in terminal.text
     assert "Register unchanged." in terminal.out
     assert "BRUNO (whisper)" in terminal.text
+
+
+async def test_g_changes_the_narrator_register(project: Project, provider: ToneProvider) -> None:
+    cast = copy.deepcopy(CAST)
+    cast["characters"]["narratore"]["registers"] = {"whisper": "clone:narratore-whisper"}
+    project.cast_path.write_text(yaml.safe_dump(cast), encoding="utf-8")
+    _, terminal, _ = await review(project, provider, ["g", "1", "g", "0", "q"])
+    voices = [call[1] for call in provider.calls]
+    # render reads narration with the main voice; back on it, its take is current again
+    assert voices == ["onyx", "clone:narratore-whisper"]
+    segment = project.load_script().segment("p001.1")
+    assert segment.register_ is None
+    assert segment.speaker is None  # still read by the narrator
+    assert "Register for narratore: 0 main voice · 1 whisper" in terminal.text
+    assert "NARRATORE (whisper)" in terminal.text
 
 
 async def test_plus_and_minus_change_speed(project: Project, provider: ToneProvider) -> None:

@@ -173,6 +173,40 @@ voxello voice clone narratore ~/lettura.m4a --prepare --start 12.5 --duration 8 
 The clean clip and a `narratore.json` sidecar (source file, window, transcript) stay in the
 recordings directory, like the clips `voice record` keeps.
 
+## Registers from one long recording
+
+A longer recording of the same person (an interview, a reading) usually holds more than one
+tone. Each window you clone becomes a register, without a recording session:
+
+1. Listen to the recording and note a few 3-10 s windows with a clear, different tone: a
+   neutral one, a calm or reflective one, a quiet one.
+2. Clone the most neutral window as the main voice: it reads every line of a dialogue at the
+   first render, so choose it with the most care.
+3. Clone each other window as `<name>-<register>`:
+
+```bash
+voxello voice clone alessandra ~/intervista.wav --prepare --start 10.5 --duration 8 \
+  --ref-text "Le parole dette in quella finestra."
+voxello voice clone alessandra-calm ~/intervista.wav --prepare --start 0 --duration 10 \
+  --ref-text "Ehm, le parole della finestra più riflessiva..."
+```
+
+4. `voxello dialogue cast` adds `alessandra-calm` as the register `calm` of `alessandra`; render
+   the dialogue, then in `voxello dialogue review` press `g` on the lines whose atmosphere asks
+   for another register (and `0` to go back to the main voice). This works for the narrator too.
+
+Things to know:
+
+- All the registers come from the same microphone and room, so switching between them keeps
+  the timbre consistent, often more than registers recorded on different days.
+- Tone carries over well (calm, whisper); sadness less; pace and intensity are uncertain, so
+  for a slower passage also use `-` in review.
+- The transcript matters: hesitations you write ("ehm") make the clone more hesitant, which
+  can suit a reflective register and spoil the main voice.
+- Registers obvious from the text ("sussurrò") are still worth annotating so they are right
+  at the first render; atmosphere is easier to choose by ear in review.
+- Permission is per person, not per clip: each `voice clone` asks for it again.
+
 ## Use the voices
 
 Pass a voice wherever Voxello accepts one:

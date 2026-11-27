@@ -65,6 +65,21 @@ def test_matches_profiles_by_name_and_register(project: Project) -> None:
     assert "1 speech line has no speaker yet" in draft.text
 
 
+def test_the_narrator_gets_its_registers_even_if_no_line_uses_them(project: Project) -> None:
+    draft = draft_cast(
+        project.load_script(),
+        language="it",
+        narrator="narratore",
+        profiles={"narratore", "narratore-whisper", "bruno", "anna"},
+        designs={},
+    )
+    narrator = Cast.from_yaml(draft.text).characters["narratore"]
+    assert narrator.voice == "clone:narratore"
+    assert {r: s.voice for r, s in narrator.registers.items()} == {
+        "whisper": "clone:narratore-whisper"
+    }
+
+
 def test_missing_voices_point_at_the_expected_profile(project: Project) -> None:
     draft = draft_cast(
         project.load_script(), language="en", narrator="narrator", profiles=set(), designs={}
