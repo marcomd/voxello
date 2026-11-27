@@ -87,7 +87,7 @@ def test_wav_helpers(tmp_path: Path):
 def _dead_pid() -> int:
     import subprocess
 
-    proc = subprocess.Popen(["true"])
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
     proc.wait()
     return proc.pid
 
@@ -128,23 +128,28 @@ def test_cleanup_on_start_removes_abandoned_namespaces_only(tmp_path: Path):
     directory = tmp_path / "tmp"
     directory.mkdir(parents=True)
 
-    live = directory / "99999-live"
+    live = directory / f"voxello-temp-{os.getpid()}-live"
     live.mkdir()
     (live / "owner").write_text(str(os.getpid()))
     os.utime(live, (time.time() - 3600, time.time() - 3600))
 
     dead_pid = _dead_pid()
-    dead = directory / "99999-dead"
+    dead = directory / f"voxello-temp-{dead_pid}-dead"
     dead.mkdir()
     (dead / "owner").write_text(str(dead_pid))
     (dead / "vox_stale.wav").write_bytes(b"x")
     os.utime(dead, (time.time() - 3600, time.time() - 3600))
 
-    missing = directory / "99999-missing"
+    missing = directory / "voxello-temp-99999-missing"
     missing.mkdir()
     os.utime(missing, (time.time() - 3600, time.time() - 3600))
 
-    fresh_dead = directory / "99999-fresh"
+    mismatch = directory / f"voxello-temp-{dead_pid}-mismatch"
+    mismatch.mkdir()
+    (mismatch / "owner").write_text(str(os.getpid()))
+    os.utime(mismatch, (1, 1))
+
+    fresh_dead = directory / f"voxello-temp-{dead_pid}-fresh"
     fresh_dead.mkdir()
     (fresh_dead / "owner").write_text(str(dead_pid))
 
@@ -152,10 +157,34 @@ def test_cleanup_on_start_removes_abandoned_namespaces_only(tmp_path: Path):
     store.prepare()
 
     assert live.exists(), "a live owner must keep its namespace"
-    assert not dead.exists(), "a dead owner's namespace is reclaimed"
-    assert not missing.exists(), "a namespace with no owner file is reclaimed"
+    assert dead.exists() == (sys.platform == "win32")
+    assert missing.exists(), "an unknown owner is not proof of abandonment"
+    assert mismatch.exists(), "a mismatched owner is not proof of abandonment"
     assert fresh_dead.exists(), "a fresh namespace is left alone"
     assert store.namespace_dir.exists()
+
+
+def test_startup_preserves_unrelated_directories_and_legacy_audio(tmp_path: Path):
+    directory = tmp_path / "tmp"
+    directory.mkdir()
+    unrelated = directory / "documents"
+    unrelated.mkdir()
+    (unrelated / "important").write_text("keep")
+    os.utime(unrelated, (1, 1))
+    legacy = directory / "vox_legacy.wav"
+    legacy.write_bytes(b"audio")
+    os.utime(legacy, (1, 1))
+    TempStore(directory, 10, True).prepare()
+    assert (unrelated / "important").read_text() == "keep"
+    assert legacy.exists()
+
+
+def test_windows_pid_check_never_sends_a_signal(monkeypatch):
+    from voxello.storage import files
+
+    monkeypatch.setattr(files.sys, "platform", "win32")
+    monkeypatch.setattr(files.os, "kill", lambda *_: pytest.fail("must not signal a process"))
+    assert files._pid_alive(123) is not False
 
 
 def test_dispose_removes_only_own_namespace(tmp_path: Path):

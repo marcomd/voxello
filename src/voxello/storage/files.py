@@ -14,6 +14,7 @@ import re
 import secrets
 import shutil
 import stat
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -23,6 +24,7 @@ from voxello.errors import STORAGE_ERROR, VoxelloError
 log = logging.getLogger(__name__)
 
 _TEMP_PREFIX = "vox_"
+_NAMESPACE = re.compile(r"^voxello-temp-([1-9][0-9]*)-([A-Za-z0-9_-]+)$")
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
@@ -48,7 +50,7 @@ class TempStore:
         self.retention_seconds = retention_minutes * 60
         self.cleanup_on_start = cleanup_on_start
         self.stale_grace_seconds = stale_grace_seconds
-        self.namespace = namespace or f"{os.getpid()}-{secrets.token_urlsafe(8)}"
+        self.namespace = namespace or f"voxello-temp-{os.getpid()}-{secrets.token_urlsafe(8)}"
 
     @property
     def namespace_dir(self) -> Path:
@@ -130,7 +132,13 @@ class TempStore:
             return 0
         now = time.time()
         for entry in entries:
-            if not entry.is_dir() or entry.name == self.namespace:
+            match = _NAMESPACE.fullmatch(entry.name)
+            if (
+                match is None
+                or entry.is_symlink()
+                or not entry.is_dir()
+                or entry.name == self.namespace
+            ):
                 continue
             try:
                 if now - entry.stat().st_mtime < self.stale_grace_seconds:
@@ -138,7 +146,7 @@ class TempStore:
             except OSError:
                 continue
             pid = self._read_owner_pid(entry)
-            if pid is not None and _pid_alive(pid):
+            if pid is None or pid != int(match.group(1)) or _pid_alive(pid) is not False:
                 continue
             try:
                 shutil.rmtree(entry, ignore_errors=True)
@@ -166,7 +174,10 @@ class TempStore:
             raise
 
 
-def _pid_alive(pid: int) -> bool:
+def _pid_alive(pid: int) -> bool | None:
+    if sys.platform == "win32":
+        # os.kill(pid, 0) terminates the process on Windows. Keep unknown owners.
+        return None
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -174,7 +185,7 @@ def _pid_alive(pid: int) -> bool:
     except PermissionError:
         return True  # exists but owned by someone else
     except OSError:
-        return False
+        return None
     return True
 
 
