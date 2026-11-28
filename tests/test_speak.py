@@ -42,7 +42,7 @@ async def test_speak_without_play_generates_and_cleans_up(service, player: FakeP
     result = await service.speak("Solo generazione", play=False)
     assert result.status == "generated"
     assert player.handles == []
-    assert list(service.temp_store.directory.iterdir()) == []
+    assert [p for p in service.temp_store.namespace_dir.iterdir() if p.name != "owner"] == []
 
 
 async def test_speak_save_persists_copy(service, settings):

@@ -734,6 +734,10 @@ back as tool errors with a stable code: `tts_provider_unavailable`, `tts_provide
 - **Private by default.** Temporary audio lives in the OS cache directory with 0700 permissions,
   gets random names, and is deleted after playback and after `storage.temp_retention_minutes`.
   Logs record text length, not text, unless `logging.log_text: true`.
+  Each service uses its own subdirectory there. At startup (`storage.cleanup_on_start`),
+  Voxello removes subdirectories left by instances whose process no longer exists and loose
+  `vox_*.wav` files from older versions once they are past the retention period; it never
+  touches anything else in `storage.temp_dir` (shown by `voxello doctor`).
 - **Cached phrases persist, hashed.** Cached audio lives in its own 0700 directory under a
   SHA-256 of the text and synthesis parameters; the text itself is never written there. Only
   hook phrases and CLI notifications (or explicit `cache: true`) up to 300 characters are cached, the least recently

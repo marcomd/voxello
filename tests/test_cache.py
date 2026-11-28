@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import stat
 import sys
@@ -18,7 +19,15 @@ from voxello.errors import STORAGE_ERROR, TTS_PROVIDER_UNAVAILABLE, VoxelloError
 from voxello.storage.cache import AudioCache, CacheKeyParts, normalize_text
 from voxello.storage.files import OutputStore, TempStore
 
-from .conftest import FakeNotifier, FakePlayer, FakeProvider, make_cache, make_wav, settle
+from .conftest import (
+    BlockingPlayer,
+    FakeNotifier,
+    FakePlayer,
+    FakeProvider,
+    make_cache,
+    make_wav,
+    settle,
+)
 
 PARTS = CacheKeyParts(
     text="Claude Code ha finito.",
@@ -201,21 +210,22 @@ async def test_notification_is_cached_and_hit_skips_synthesis(
     assert (second.provider, second.voice) == ("fake", "default")
     assert len(provider.calls) == 1, "a hit must not call the provider"
     handle = await player.wait_started()
-    assert service.audio_cache is not None and service.audio_cache.owns(handle.path)
+    assert service.temp_store.owns(handle.path), "a hit plays from a request-owned temp copy"
+    cache_entry = service.audio_cache.entries()[0] if service.audio_cache else None
     record = service.get_record(second.request_id)
     assert record is not None and record.cached and record.state == RequestState.PLAYING
     status = await service.status()
     assert status.cache_hits == 1
 
-    # Neither the end of playback nor the sweeper nor shutdown may delete a cache file.
+    # The end of playback, the sweeper and shutdown may delete the temp copy, never the cache.
     await player.finish_current()
     await settle()
     assert record.state == RequestState.COMPLETED
-    assert handle.path.exists()
+    assert not handle.path.exists()
     service.temp_store.sweep(max_age_seconds=0)
-    assert handle.path.exists()
+    assert cache_entry is not None and cache_entry.path.exists()
     await service.aclose()
-    assert handle.path.exists()
+    assert cache_entry is not None and cache_entry.path.exists()
 
 
 async def test_hit_works_while_tts_is_down(
@@ -259,7 +269,7 @@ async def test_cache_policy(service: VoxelloService, provider: FakeProvider, pla
     assert await speak(long, cache=True) is False
     assert await speak(long, cache=True) is False
     assert service.audio_cache is not None and service.audio_cache.stats()[0] == 2
-    assert list(service.temp_store.directory.iterdir()) == []
+    assert [p for p in service.temp_store.namespace_dir.iterdir() if p.name != "owner"] == []
     assert player.handles == []
 
 
@@ -315,3 +325,105 @@ async def test_save_works_from_a_cache_hit(service: VoxelloService, player: Fake
     assert result.cached is True and result.status == "saved"
     assert result.saved_path is not None and Path(result.saved_path).exists()
     assert make_cache(service.settings).stats()[0] == 1
+
+
+async def test_cache_hit_materializes_a_request_owned_temp_copy(
+    service: VoxelloService, provider: FakeProvider, player: FakePlayer
+):
+    first = await service.speak("Claude Code ha finito.", mode="notification")
+    assert first.cached is False
+    handle = await player.wait_started()
+    await player.finish_current()
+    await settle()
+
+    second = await service.speak("Claude Code ha finito.", mode="notification")
+    assert second.cached is True
+    handle = await player.wait_started()
+    assert service.temp_store.owns(handle.path), "a hit plays from a request-owned temp copy"
+    assert service.audio_cache is not None and not service.audio_cache.owns(handle.path)
+
+    await player.finish_current()
+    await settle()
+    assert not handle.path.exists(), "the temp copy is discarded after playback"
+    assert service.audio_cache is not None and service.audio_cache.stats()[0] == 1
+
+
+async def test_cache_clear_during_queued_playback_cannot_invalidate_the_input(
+    settings, provider: FakeProvider, notifier: FakeNotifier, tmp_path: Path
+):
+    from voxello.core.service import VoxelloService
+    from voxello.storage.files import OutputStore, TempStore
+
+    player = BlockingPlayer(block=False)
+    svc = VoxelloService(
+        settings,
+        provider=provider,
+        player=player,
+        notifier=notifier,
+        temp_store=TempStore(settings.storage.resolved_temp_dir(), 1, True),
+        output_store=OutputStore(settings.output.resolved_directory()),
+        audio_cache=make_cache(settings),
+    )
+    await svc.start()
+    try:
+        first = await svc.speak("Claude Code ha finito.", mode="notification", interrupt=False)
+        assert first.cached is False
+        await player.wait_started()
+        await player.finish_current()
+        await settle()
+
+        # block the player on an uncached phrase, then queue the cached hit behind it
+        player.block = True
+        player.started_play.clear()
+        player.release.clear()
+        uncached = asyncio.create_task(
+            svc.speak("Frase lunga e unica del pomeriggio.", mode="notification", interrupt=False)
+        )
+        await asyncio.wait_for(player.started_play.wait(), 2)
+        queued = await svc.speak("Claude Code ha finito.", mode="notification", interrupt=False)
+        assert queued.status == "queued"
+        hit_path = svc.get_record(queued.request_id).audio_path
+        assert hit_path is not None and hit_path.exists()
+
+        # a second instance clears the cache while the hit is queued
+        foreign = AudioCache(settings.cache.resolved_directory(), max_entries=1, max_age_days=1)
+        foreign.clear()
+
+        assert hit_path.exists(), "queued playback must not depend on the cache file"
+
+        player.release.set()
+        await asyncio.wait_for(uncached, 2)
+        for _ in range(20):
+            if player.current is None:
+                break
+            await player.finish_current()
+    finally:
+        player.release.set()
+        await svc.aclose()
+
+
+async def test_cache_hit_with_vanished_entry_falls_back_to_synthesis(
+    service: VoxelloService, provider: FakeProvider, player: FakePlayer
+):
+    await service.speak("Claude Code ha finito.", mode="notification")
+    await player.wait_started()
+    await player.finish_current()
+    await settle()
+    assert service.audio_cache is not None
+
+    original_lookup = service.audio_cache.lookup
+
+    def lookup_then_delete(key):
+        entry = original_lookup(key)
+        if entry is not None:
+            entry.path.unlink()
+            entry.path.with_name(entry.path.stem + ".json").unlink()
+        return entry
+
+    service.audio_cache.lookup = lookup_then_delete
+    try:
+        result = await service.speak("Claude Code ha finito.", mode="notification")
+    finally:
+        service.audio_cache.lookup = original_lookup
+    assert result.cached is False, "a vanished entry must be treated as a miss"
+    assert len(provider.calls) == 2

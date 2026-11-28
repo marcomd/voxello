@@ -165,6 +165,7 @@ class FakeHandle:
         self.done = asyncio.Event()
         self.returncode = 0
         self.terminated = False
+        self.terminate_calls = 0
 
     async def wait(self) -> int:
         await self.done.wait()
@@ -172,6 +173,7 @@ class FakeHandle:
 
     async def terminate(self) -> None:
         self.terminated = True
+        self.terminate_calls += 1
         self.done.set()
 
     def finish(self, returncode: int = 0) -> None:
@@ -211,6 +213,22 @@ class FakePlayer:
         assert handle is not None, "nothing is playing"
         handle.finish(returncode)
         await asyncio.sleep(0)
+
+
+class BlockingPlayer(FakePlayer):
+    """Blocks the spawn phase (``play()``) while ``block`` is set, until ``release`` is set."""
+
+    def __init__(self, *, block: bool = True) -> None:
+        super().__init__()
+        self.block = block
+        self.started_play = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def play(self, path: Path) -> FakeHandle:
+        if self.block:
+            self.started_play.set()
+            await self.release.wait()
+        return await super().play(path)
 
 
 class FakeNotifier:
