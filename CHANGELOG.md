@@ -11,12 +11,16 @@ change the MCP tool signatures or the configuration layout.
 
 - Temporary audio is now written to a per-instance namespace inside the configured temp
   directory, so a one-shot CLI/hook command never sweeps or deletes the audio owned by a
-  long-lived MCP server (and vice versa). Startup cleanup removes only namespaces whose owner
-  is provably dead on POSIX; Windows retains abandoned namespaces. Unknown owners and
-  unrelated directories are preserved. Legacy loose audio files must be removed manually
-  after stopping all older Voxello instances; the retention sweeper only touches its own namespace.
+  long-lived MCP server (and vice versa); the retention sweeper only touches its own namespace.
+  Startup cleanup removes another namespace only when its owner process is provably gone,
+  checked without signals on Windows (`OpenProcess`); unknown owners and unrelated
+  directories are preserved. Loose `vox_*` files left by older versions are removed at startup
+  once they are older than `storage.temp_retention_minutes` plus two minutes, the point past
+  which those versions would have swept them themselves.
 - `stop` and interrupts during player startup terminate the handle when it becomes available;
   a player may briefly start before termination.
+- Shutting down the service while a request is starting or playing now terminates the player
+  and ends the request as `cancelled`, releasing its temporary audio.
 - A cache hit now materializes request-owned playback audio in the temp store instead of
   handing the player the cache file directly, so cache eviction or `cache clear` from another
   process cannot invalidate a queued playback. A cache entry that vanishes between lookup and

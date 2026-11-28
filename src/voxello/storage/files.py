@@ -18,6 +18,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Protocol
 
 from voxello.errors import STORAGE_ERROR, VoxelloError
 
@@ -25,6 +26,10 @@ log = logging.getLogger(__name__)
 
 _TEMP_PREFIX = "vox_"
 _NAMESPACE = re.compile(r"^voxello-temp-([1-9][0-9]*)-([A-Za-z0-9_-]+)$")
+# Versions before per-instance namespaces wrote loose vox_* files directly into the temp
+# directory and swept any of them older than the retention period every 60 seconds, so a
+# loose file older than retention plus this margin is no longer in use by such an instance.
+LEGACY_MARGIN_SECONDS = 120
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
@@ -33,8 +38,9 @@ class TempStore:
 
     Every running service gets its own namespace so a one-shot CLI/hook command never
     sweeps files owned by a long-lived MCP server (or vice versa). Startup cleanup removes
-    only namespaces whose owner is provably dead; the retention sweeper only touches the
-    store's own namespace.
+    only namespaces whose owner is provably dead and loose legacy files past the retention
+    period of older versions; the retention sweeper only touches the store's own namespace.
+    See docs/decisions/0005-temp-audio-ownership.md.
     """
 
     def __init__(
@@ -69,7 +75,14 @@ class TempStore:
             pass
         (self.namespace_dir / "owner").write_text(str(os.getpid()), encoding="utf-8")
         if self.cleanup_on_start:
-            self._sweep_abandoned()
+            namespaces = self._sweep_abandoned()
+            legacy = self._sweep_legacy()
+            if namespaces or legacy:
+                log.info(
+                    "Removed %d abandoned temp namespace(s) and %d legacy temp file(s)",
+                    namespaces,
+                    legacy,
+                )
 
     def new_path(self, suffix: str = ".wav") -> Path:
         return self.namespace_dir / f"{_TEMP_PREFIX}{secrets.token_urlsafe(12)}{suffix}"
@@ -100,10 +113,7 @@ class TempStore:
 
     def dispose(self) -> None:
         """Remove the owned namespace directory (best effort, idempotent)."""
-        try:
-            shutil.rmtree(self.namespace_dir, ignore_errors=True)
-        except OSError:  # pragma: no cover
-            pass
+        shutil.rmtree(self.namespace_dir, ignore_errors=True)
 
     def sweep(self, max_age_seconds: float | None = None) -> int:
         """Delete own temp files older than the retention period; return how many."""
@@ -155,6 +165,27 @@ class TempStore:
                 continue
         return removed
 
+    def _sweep_legacy(self) -> int:
+        """Remove loose ``vox_*`` files left by older versions once past their retention."""
+        cutoff = time.time() - self.retention_seconds - LEGACY_MARGIN_SECONDS
+        removed = 0
+        try:
+            entries = list(self.directory.iterdir())
+        except OSError:  # pragma: no cover
+            return 0
+        for entry in entries:
+            if not entry.name.startswith(_TEMP_PREFIX):
+                continue
+            try:
+                info = entry.lstat()
+                if not stat.S_ISREG(info.st_mode) or info.st_mtime > cutoff:
+                    continue
+                entry.unlink()
+                removed += 1
+            except OSError:  # pragma: no cover
+                continue
+        return removed
+
     @staticmethod
     def _read_owner_pid(namespace: Path) -> int | None:
         try:
@@ -175,9 +206,11 @@ class TempStore:
 
 
 def _pid_alive(pid: int) -> bool | None:
+    """True if ``pid`` exists, False if it provably does not, None when unknown."""
     if sys.platform == "win32":
-        # os.kill(pid, 0) terminates the process on Windows. Keep unknown owners.
-        return None
+        # Never os.kill(pid, 0) here: signal 0 is CTRL_C_EVENT on Windows.
+        query = _windows_process_query()
+        return None if query is None else _windows_pid_alive(pid, query)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -187,6 +220,80 @@ def _pid_alive(pid: int) -> bool | None:
     except OSError:
         return None
     return True
+
+
+_STILL_ACTIVE = 259
+_ERROR_ACCESS_DENIED = 5
+_ERROR_INVALID_PARAMETER = 87  # OpenProcess on a PID that does not exist
+
+
+class _ProcessQuery(Protocol):
+    """The Win32 calls behind ``_windows_pid_alive``; a fake in tests."""
+
+    def open(self, pid: int) -> int | None: ...
+    def last_error(self) -> int: ...
+    def exit_code(self, handle: int) -> int | None: ...
+    def close(self, handle: int) -> None: ...
+
+
+def _windows_pid_alive(pid: int, query: _ProcessQuery) -> bool | None:
+    handle = query.open(pid)
+    if handle is None:
+        error = query.last_error()
+        if error == _ERROR_INVALID_PARAMETER:
+            return False
+        if error == _ERROR_ACCESS_DENIED:
+            return True
+        return None
+    try:
+        code = query.exit_code(handle)
+    finally:
+        query.close(handle)
+    if code is None:
+        return None
+    # A process that exited with code 259 reads as alive: unknown owners are kept.
+    return code == _STILL_ACTIVE
+
+
+def _windows_process_query() -> _ProcessQuery | None:  # pragma: no cover - Windows only
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        open_process = kernel32.OpenProcess
+        open_process.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        open_process.restype = wintypes.HANDLE
+        get_exit_code = kernel32.GetExitCodeProcess
+        get_exit_code.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+        get_exit_code.restype = wintypes.BOOL
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = (wintypes.HANDLE,)
+        close_handle.restype = wintypes.BOOL
+    except (AttributeError, OSError):
+        return None
+
+    process_query_limited_information = 0x1000
+
+    class Kernel32Query:
+        def open(self, pid: int) -> int | None:
+            return open_process(process_query_limited_information, False, pid) or None
+
+        def last_error(self) -> int:
+            return ctypes.get_last_error()
+
+        def exit_code(self, handle: int) -> int | None:
+            code = wintypes.DWORD()
+            if not get_exit_code(handle, ctypes.byref(code)):
+                return None
+            return code.value
+
+        def close(self, handle: int) -> None:
+            close_handle(handle)
+
+    return Kernel32Query()
 
 
 class OutputStore:

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from voxello.errors import STORAGE_ERROR, VoxelloError
-from voxello.storage.files import OutputStore, TempStore
+from voxello.storage.files import LEGACY_MARGIN_SECONDS, OutputStore, TempStore
 from voxello.storage.wav import is_wav, wav_duration_ms, write_silence
 
 from .conftest import make_wav
@@ -157,34 +157,141 @@ def test_cleanup_on_start_removes_abandoned_namespaces_only(tmp_path: Path):
     store.prepare()
 
     assert live.exists(), "a live owner must keep its namespace"
-    assert dead.exists() == (sys.platform == "win32")
+    assert not dead.exists(), "a provably dead owner's namespace is reclaimed on every platform"
     assert missing.exists(), "an unknown owner is not proof of abandonment"
     assert mismatch.exists(), "a mismatched owner is not proof of abandonment"
     assert fresh_dead.exists(), "a fresh namespace is left alone"
     assert store.namespace_dir.exists()
 
 
-def test_startup_preserves_unrelated_directories_and_legacy_audio(tmp_path: Path):
+def _age(path: Path, seconds: float) -> None:
+    past = time.time() - seconds
+    os.utime(path, (past, past))
+
+
+def test_startup_preserves_unrelated_directories(tmp_path: Path):
     directory = tmp_path / "tmp"
     directory.mkdir()
     unrelated = directory / "documents"
     unrelated.mkdir()
     (unrelated / "important").write_text("keep")
     os.utime(unrelated, (1, 1))
-    legacy = directory / "vox_legacy.wav"
-    legacy.write_bytes(b"audio")
-    os.utime(legacy, (1, 1))
     TempStore(directory, 10, True).prepare()
     assert (unrelated / "important").read_text() == "keep"
-    assert legacy.exists()
+
+
+def test_startup_reclaims_legacy_audio_older_than_retention(tmp_path: Path):
+    # Older versions wrote loose vox_* files and swept any of them past the retention
+    # period, so one that is older than that (plus a margin) is not in use by them.
+    directory = tmp_path / "tmp"
+    directory.mkdir()
+    retention = 10 * 60
+    stale = directory / "vox_stale.wav"
+    stale.write_bytes(b"audio")
+    _age(stale, retention + LEGACY_MARGIN_SECONDS + 5)
+    recent = directory / "vox_recent.wav"
+    recent.write_bytes(b"audio")
+    _age(recent, retention + 1)
+    other = directory / "notes.txt"
+    other.write_text("keep")
+    _age(other, 10 * retention)
+    legacy_dir = directory / "vox_folder"
+    legacy_dir.mkdir()
+    _age(legacy_dir, 10 * retention)
+
+    TempStore(directory, retention_minutes=10, cleanup_on_start=True).prepare()
+
+    assert not stale.exists()
+    assert recent.exists(), "an older instance may still own audio within its retention"
+    assert other.exists() and legacy_dir.exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+def test_startup_never_follows_legacy_symlinks(tmp_path: Path):
+    directory = tmp_path / "tmp"
+    directory.mkdir()
+    target = tmp_path / "elsewhere.wav"
+    target.write_bytes(b"keep")
+    link = directory / "vox_link.wav"
+    link.symlink_to(target)
+    os.utime(link, (1, 1), follow_symlinks=False)
+    TempStore(directory, 10, True).prepare()
+    assert link.is_symlink() and target.read_bytes() == b"keep"
+
+
+def test_no_startup_cleanup_when_disabled(tmp_path: Path):
+    directory = tmp_path / "tmp"
+    directory.mkdir()
+    legacy = directory / "vox_legacy.wav"
+    legacy.write_bytes(b"audio")
+    _age(legacy, 10**6)
+    dead_pid = _dead_pid()
+    dead = directory / f"voxello-temp-{dead_pid}-dead"
+    dead.mkdir()
+    (dead / "owner").write_text(str(dead_pid))
+    _age(dead, 3600)
+    TempStore(directory, 10, cleanup_on_start=False).prepare()
+    assert legacy.exists() and dead.exists()
+
+
+class FakeProcessQuery:
+    """Stands in for OpenProcess/GetExitCodeProcess/CloseHandle."""
+
+    def __init__(self, *, handle: int | None = 7, error: int = 0, exit_code: int | None = 259):
+        self.handle = handle
+        self.error = error
+        self.code = exit_code
+        self.closed: list[int] = []
+
+    def open(self, pid: int) -> int | None:
+        return self.handle
+
+    def last_error(self) -> int:
+        return self.error
+
+    def exit_code(self, handle: int) -> int | None:
+        return self.code
+
+    def close(self, handle: int) -> None:
+        self.closed.append(handle)
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        (FakeProcessQuery(exit_code=259), True),  # STILL_ACTIVE
+        (FakeProcessQuery(exit_code=0), False),  # exited, handle kept alive elsewhere
+        (FakeProcessQuery(exit_code=None), None),  # GetExitCodeProcess failed
+        (FakeProcessQuery(handle=None, error=87), False),  # ERROR_INVALID_PARAMETER: no such pid
+        (FakeProcessQuery(handle=None, error=5), True),  # ERROR_ACCESS_DENIED: exists
+        (FakeProcessQuery(handle=None, error=1), None),  # anything else is unknown
+    ],
+)
+def test_windows_liveness_queries_the_process(query, expected):
+    from voxello.storage import files
+
+    assert files._windows_pid_alive(123, query) is expected
+    if query.handle is not None:
+        assert query.closed == [query.handle], "the process handle is always closed"
 
 
 def test_windows_pid_check_never_sends_a_signal(monkeypatch):
     from voxello.storage import files
 
+    query = FakeProcessQuery(handle=None, error=87)
     monkeypatch.setattr(files.sys, "platform", "win32")
+    monkeypatch.setattr(files, "_windows_process_query", lambda: query)
     monkeypatch.setattr(files.os, "kill", lambda *_: pytest.fail("must not signal a process"))
-    assert files._pid_alive(123) is not False
+    assert files._pid_alive(123) is False
+
+
+def test_windows_pid_check_without_process_api_keeps_owner(monkeypatch):
+    from voxello.storage import files
+
+    monkeypatch.setattr(files.sys, "platform", "win32")
+    monkeypatch.setattr(files, "_windows_process_query", lambda: None)
+    monkeypatch.setattr(files.os, "kill", lambda *_: pytest.fail("must not signal a process"))
+    assert files._pid_alive(123) is None
 
 
 def test_dispose_removes_only_own_namespace(tmp_path: Path):
@@ -201,3 +308,20 @@ def test_dispose_removes_only_own_namespace(tmp_path: Path):
     assert not store_b.namespace_dir.exists()
     store_a.dispose()
     assert not store_a.namespace_dir.exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX liveness check")
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [(ProcessLookupError, False), (PermissionError, True), (OSError, None), (None, True)],
+)
+def test_posix_liveness_maps_kill_results(monkeypatch, error, expected):
+    from voxello.storage import files
+
+    def kill(pid: int, sig: int) -> None:
+        assert sig == 0
+        if error is not None:
+            raise error()
+
+    monkeypatch.setattr(files.os, "kill", kill)
+    assert files._pid_alive(123) is expected

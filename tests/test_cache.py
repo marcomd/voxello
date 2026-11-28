@@ -19,7 +19,15 @@ from voxello.errors import STORAGE_ERROR, TTS_PROVIDER_UNAVAILABLE, VoxelloError
 from voxello.storage.cache import AudioCache, CacheKeyParts, normalize_text
 from voxello.storage.files import OutputStore, TempStore
 
-from .conftest import FakeNotifier, FakePlayer, FakeProvider, make_cache, make_wav, settle
+from .conftest import (
+    BlockingPlayer,
+    FakeNotifier,
+    FakePlayer,
+    FakeProvider,
+    make_cache,
+    make_wav,
+    settle,
+)
 
 PARTS = CacheKeyParts(
     text="Claude Code ha finito.",
@@ -346,7 +354,7 @@ async def test_cache_clear_during_queued_playback_cannot_invalidate_the_input(
     from voxello.core.service import VoxelloService
     from voxello.storage.files import OutputStore, TempStore
 
-    player = BlockingPlayer()
+    player = BlockingPlayer(block=False)
     svc = VoxelloService(
         settings,
         provider=provider,
@@ -419,19 +427,3 @@ async def test_cache_hit_with_vanished_entry_falls_back_to_synthesis(
         service.audio_cache.lookup = original_lookup
     assert result.cached is False, "a vanished entry must be treated as a miss"
     assert len(provider.calls) == 2
-
-
-class BlockingPlayer(FakePlayer):
-    """Blocks spawn while ``block`` is set; the test releases it explicitly."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.block = False
-        self.started_play = asyncio.Event()
-        self.release = asyncio.Event()
-
-    async def play(self, path):
-        if self.block:
-            self.started_play.set()
-            await self.release.wait()
-        return await super().play(path)

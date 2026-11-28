@@ -278,12 +278,11 @@ class VoxelloService:
                     log.warning(
                         "cache entry %s vanished; treating as a miss", (cache_key or "")[:12]
                     )
-                    entry = None
             if entry is not None and hit_audio is not None:
                 audio_path = self.temp_store.write(hit_audio)
                 record.cached = True
                 record.voice = entry.voice
-                record.duration_ms = wav_duration_ms(audio_path)
+                record.duration_ms = wav_duration_ms(hit_audio)
                 provider_name = entry.provider
                 self._cache_hits += 1
                 log.info(

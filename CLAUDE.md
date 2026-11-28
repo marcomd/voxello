@@ -77,8 +77,10 @@ Layers, top to bottom, each depending only on the ones below:
   `speak`/`notify` take `cache: bool | None`: `_cache_allowed` applies the policy (notifications
   cached by default, verbatim only on request, never outside `cache.min/max_text_chars`), the
   lookup runs before `_synth_lock` so a hit never waits on the TTS server, and a miss stores the
-  WAV after synthesis (a store failure is logged, never raised). Hits play the cache file in
-  place and count in `StatusReport.cache_hits`. `speak`/`notify` also take `language: str | None`
+  WAV after synthesis (a store failure is logged, never raised). A hit copies the cache file
+  into the temp store and plays that copy (another process may evict or clear the entry while
+  it is queued; an entry that vanishes before the read is a miss); hits count in
+  `StatusReport.cache_hits`. `speak`/`notify` also take `language: str | None`
   (roadmap 3.1): `_validate_language` strips, lowercases and checks `^[a-z]{2}$`
   (`invalid_language`), falling back to `speech.default_language`; `_resolve_voice` fixes the
   effective voice once (request `voice` > `speech.voices_by_language[language]` >
@@ -105,6 +107,13 @@ Layers, top to bottom, each depending only on the ones below:
   `user_cache_dir/audio`, a sibling of `TempStore`'s `tmp/`, and `Settings` rejects the two
   directories being equal because `TempStore.owns()` is what keeps the service from deleting cache
   files.
+- `storage/files.py` (`TempStore`) gives each service its own namespace
+  `<temp_dir>/voxello-temp-<pid>-<nonce>` with an `owner` pid file; `owns`, `discard`, `sweep`
+  and `dispose` (called by `aclose`) touch only that namespace. With `cleanup_on_start`,
+  `prepare()` removes other namespaces only when the owner is provably dead (`_pid_alive`:
+  `os.kill(pid, 0)` on POSIX, `OpenProcess`/`GetExitCodeProcess` on Windows, never a signal
+  there) and loose legacy `vox_*` files older than retention plus `LEGACY_MARGIN_SECONDS`.
+  Rationale: `docs/decisions/0005-temp-audio-ownership.md`.
 - `playback/manager.py` (`PlaybackManager`) is a single worker loop over an `asyncio` queue with
   interrupt, per-request cancel and stop-all semantics; it reports outcomes back to the service via a
   callback so records reach terminal states and temp files get discarded. `playback/detect.py`
@@ -219,8 +228,8 @@ or a real TTS server belongs under `tests/integration/` with the `integration` m
 - Leave `voice` unset for the server default: VoiceStudio and omnivoice-server name it differently
   (`default` vs `auto`) and each rejects the other's.
 - Cache files are never deleted by playback, the temp sweeper or shutdown: every discard goes
-  through `TempStore.discard`, which ignores paths outside the temp dir. Only `AudioCache.evict`
-  and `clear` remove them (plus `evict_voice` when a cloned voice changes). Anything that
+  through `TempStore.discard`, which ignores paths outside its own temp namespace. Only
+  `AudioCache.evict` and `clear` remove them (plus `evict_voice` when a cloned voice changes). Anything that
   shapes the audio must be part of `CacheKeyParts`; new fields must keep old keys stable, as
   `instructions` does by staying out of the hash when unset.
 - A request carries either a voice or voice-design instructions, never both. Clone voices only
